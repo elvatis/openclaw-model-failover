@@ -18,7 +18,7 @@ openclaw gateway restart
 
 ## ClawHub
 
-(Coming) This plugin will be published on clawhub.ai and installable via:
+This plugin is published on **clawhub.ai** and installable via:
 
 ```bash
 clawhub install openclaw-model-failover
@@ -52,7 +52,7 @@ In your OpenClaw config:
 
 ## Notes / Limitations (v0.1)
 
-- This MVP **does not re-run** the exact failed turn automatically.
+- This MVP does not re-run the exact failed turn automatically. It is conservative by default: it only overrides the model when the pinned model is marked limited.
   It prevents future turns from failing by switching the session model.
 - The plugin stores state in `~/.openclaw/workspace/memory/model-ratelimits.json` by default.
 
