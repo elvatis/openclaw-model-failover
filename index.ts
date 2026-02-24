@@ -183,6 +183,7 @@ export default function register(api: any) {
       // Tier 1: Flagships
       "openai-codex/gpt-5.3-codex",
       "anthropic/claude-opus-4-6",
+      "github-copilot/claude-sonnet-4.6",
       "google-gemini-cli/gemini-3-pro-preview",
       // Tier 2: Strong/Balanced
       "anthropic/claude-sonnet-4-6",

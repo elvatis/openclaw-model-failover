@@ -36,9 +36,17 @@ In your OpenClaw config:
         "enabled": true,
         "config": {
           "modelOrder": [
+            "openai-codex/gpt-5.3-codex",
             "anthropic/claude-opus-4-6",
+            "github-copilot/claude-sonnet-4.6",
+            "google-gemini-cli/gemini-3-pro-preview",
+            "anthropic/claude-sonnet-4-6",
             "openai-codex/gpt-5.2",
-            "google-gemini-cli/gemini-2.5-flash"
+            "google-gemini-cli/gemini-2.5-pro",
+            "perplexity/sonar-deep-research",
+            "perplexity/sonar-pro",
+            "google-gemini-cli/gemini-2.5-flash",
+            "google-gemini-cli/gemini-3-flash-preview"
           ],
           "cooldownMinutes": 300,
           "patchSessionPins": true,

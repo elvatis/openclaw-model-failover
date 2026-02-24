@@ -1,7 +1,7 @@
 {
   "id": "openclaw-model-failover",
   "name": "OpenClaw Model Failover",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Auto-detect rate limits/quota errors and switch sessions to fallback LLMs.",
   "configSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -14,9 +14,17 @@
         "description": "Fallback order of model ids. First entry is preferred.",
         "items": { "type": "string" },
         "default": [
+          "openai-codex/gpt-5.3-codex",
           "anthropic/claude-opus-4-6",
+          "github-copilot/claude-sonnet-4.6",
+          "google-gemini-cli/gemini-3-pro-preview",
+          "anthropic/claude-sonnet-4-6",
           "openai-codex/gpt-5.2",
-          "google-gemini-cli/gemini-2.5-flash"
+          "google-gemini-cli/gemini-2.5-pro",
+          "perplexity/sonar-deep-research",
+          "perplexity/sonar-pro",
+          "google-gemini-cli/gemini-2.5-flash",
+          "google-gemini-cli/gemini-3-flash-preview"
         ]
       },
       "cooldownMinutes": {
