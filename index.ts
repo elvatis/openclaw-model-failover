@@ -46,6 +46,20 @@ function isRateLimitLike(err?: string): boolean {
   );
 }
 
+function isAuthOrScopeLike(err?: string): boolean {
+  if (!err) return false;
+  const s = err.toLowerCase();
+  // OpenAI: "Missing scopes: api.responses.write" etc.
+  return (
+    s.includes("http 401") ||
+    s.includes("insufficient permissions") ||
+    s.includes("missing scopes") ||
+    s.includes("api.responses.write") ||
+    s.includes("invalid api key") ||
+    s.includes("unauthorized")
+  );
+}
+
 function loadState(statePath: string): LimitState {
   try {
     const raw = fs.readFileSync(statePath, "utf-8");
@@ -123,16 +137,19 @@ export default function register(api: any) {
   api.on("agent_end", (event: any, ctx: any) => {
     if (event?.success !== false) return;
     const err = event?.error as string | undefined;
-    if (!isRateLimitLike(err)) return;
+
+    const isRate = isRateLimitLike(err);
+    const isAuth = isAuthOrScopeLike(err);
+    if (!isRate && !isAuth) return;
 
     const currentModel = ctx?.model || ctx?.modelId || undefined;
-    // ctx doesn't always include model; fall back to last known in state using session pin
     const state = loadState(statePath);
 
     const hitAt = nowSec();
-    const nextAvail = hitAt + cooldownMinutes * 60;
+    // Auth/scope errors shouldn't be retried aggressively.
+    const effectiveCooldownMin = isAuth ? Math.max(cooldownMinutes, 12 * 60) : cooldownMinutes;
+    const nextAvail = hitAt + effectiveCooldownMin * 60;
 
-    // Mark *first model in order* as limited when we can't see the exact model.
     const key = (typeof currentModel === "string" && currentModel.length > 0) ? currentModel : modelOrder[0];
 
     state.limited[key] = {
@@ -149,8 +166,8 @@ export default function register(api: any) {
     }
 
     if (notifyOnSwitch && ctx?.sessionKey && fallback) {
-      // We can't reliably re-run the failed turn yet, but we can prevent future failures.
-      api.logger?.warn?.(`[model-failover] Rate limit detected. Switched future turns to ${fallback} (sessionKey=${ctx.sessionKey}).`);
+      const why = isAuth ? "auth/scope error" : "rate limit";
+      api.logger?.warn?.(`[model-failover] ${why} detected. Switched future turns to ${fallback} (sessionKey=${ctx.sessionKey}).`);
     }
   });
 

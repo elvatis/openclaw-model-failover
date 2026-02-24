@@ -1,7 +1,7 @@
 {
   "id": "openclaw-model-failover",
   "name": "OpenClaw Model Failover",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Auto-detect rate limits/quota errors and switch sessions to fallback LLMs.",
   "configSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",

@@ -16,6 +16,14 @@ openclaw plugins install -l .
 openclaw gateway restart
 ```
 
+## ClawHub
+
+(Coming) This plugin will be published on clawhub.ai and installable via:
+
+```bash
+clawhub install openclaw-model-failover
+```
+
 ## Configure
 
 In your OpenClaw config:
