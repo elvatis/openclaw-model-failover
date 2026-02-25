@@ -6,6 +6,7 @@ OpenClaw plugin to **auto-detect rate limits/quota errors** and switch sessions 
 
 - Chooses a model based on a **preferred order** before each agent run.
 - Detects rate-limit/quota failures and marks the current model as **temporarily limited**.
+- Detects temporary provider/plugin cooldown errors (for example `copilot-proxy` in cooldown) and fails over.
 - Optionally patches pinned WhatsApp group sessions so you don’t get stuck with `API rate limit reached` loops.
 
 ## Install (dev)
@@ -49,8 +50,11 @@ In your OpenClaw config:
             "google-gemini-cli/gemini-3-flash-preview"
           ],
           "cooldownMinutes": 300,
+          "unavailableCooldownMinutes": 15,
           "patchSessionPins": true,
-          "notifyOnSwitch": true
+          "notifyOnSwitch": true,
+          "debugLogging": false,
+          "debugLogSampleRate": 1.0
         }
       }
     }

@@ -13,6 +13,9 @@ type PluginCfg = {
   enabled?: boolean;
   modelOrder?: string[];
   cooldownMinutes?: number;
+  unavailableCooldownMinutes?: number;
+  debugLogging?: boolean;
+  debugLogSampleRate?: number;
   stateFile?: string;
   patchSessionPins?: boolean;
   notifyOnSwitch?: boolean;
@@ -132,6 +135,18 @@ function isAuthOrScopeLike(err?: string): boolean {
   );
 }
 
+function isTemporarilyUnavailableLike(err?: string): boolean {
+  if (!err) return false;
+  const s = err.toLowerCase();
+  return (
+    s.includes("plugin is in cooldown") ||
+    s.includes("in cooldown") ||
+    s.includes("temporarily unavailable") ||
+    s.includes("service unavailable") ||
+    s.includes("copilot-proxy")
+  );
+}
+
 function loadState(statePath: string): LimitState {
   try {
     const raw = fs.readFileSync(statePath, "utf-8");
@@ -227,26 +242,46 @@ export default function register(api: any) {
     ]; 
 
   const cooldownMinutes = cfg.cooldownMinutes ?? 300;
+  const unavailableCooldownMinutes = cfg.unavailableCooldownMinutes ?? 15;
+  const debugLogging = cfg.debugLogging === true;
+  const debugLogSampleRate = Math.max(0, Math.min(1, Number(cfg.debugLogSampleRate ?? 1)));
   const statePath = expandHome(cfg.stateFile ?? "~/.openclaw/workspace/memory/model-ratelimits.json");
   const patchPins = cfg.patchSessionPins !== false;
   const notifyOnSwitch = cfg.notifyOnSwitch !== false;
 
-  const gatewayCfg = loadGatewayConfig(api);
   const requireCopilotProxy = cfg.requireCopilotProxyForCopilotModels !== false;
-  const copilotEnabled = !requireCopilotProxy || isCopilotProxyEnabled(gatewayCfg);
+  const sessionForcedModel = new Map<string, string>();
+
+  function isCopilotEnabledNow(): boolean {
+    const gatewayCfg = loadGatewayConfig(api);
+    return !requireCopilotProxy || isCopilotProxyEnabled(gatewayCfg);
+  }
 
   function effectiveOrder(): string[] {
+    const gatewayCfg = loadGatewayConfig(api);
+    const copilotEnabled = !requireCopilotProxy || isCopilotProxyEnabled(gatewayCfg);
+
     // Filter out models that are obviously not usable.
-    return modelOrder.filter((m) => {
+    const filtered = modelOrder.filter((m) => {
       if (m.startsWith("github-copilot/") && !copilotEnabled) return false;
       // Only try models that exist in agents.defaults.models when config is available.
       if (gatewayCfg && !isModelConfigured(gatewayCfg, m)) return false;
       return true;
     });
+
+    // If config shape is different and filter removed everything, keep original order as a safe fallback.
+    return filtered.length > 0 ? filtered : modelOrder;
   }
 
+  function debugLog(message: string) {
+    if (!debugLogging) return;
+    if (debugLogSampleRate < 1 && Math.random() > debugLogSampleRate) return;
+    api.logger?.info?.(`[model-failover][debug] ${message}`);
+  }
+
+  const initialCopilotEnabled = isCopilotEnabledNow();
   api.logger?.info?.(
-    `[model-failover] enabled. copilotProxy=${copilotEnabled ? "on" : "off"}. order=${effectiveOrder().join(" -> ")}`
+    `[model-failover] enabled. copilotProxy=${initialCopilotEnabled ? "on" : "off"}. order=${effectiveOrder().join(" -> ")}`
   );
 
   function getPinnedModel(sessionKey?: string): string | undefined {
@@ -271,27 +306,58 @@ export default function register(api: any) {
     if (!chosen) return;
 
     const forceOverride = (cfg as any).forceOverride === true;
+    const sessionKey = ctx?.sessionKey as string | undefined;
+    if (sessionKey) {
+      const forced = sessionForcedModel.get(sessionKey);
+      if (forced && order.includes(forced)) {
+        const forcedLimit = state.limited[forced];
+        const forcedLimited = !!forcedLimit && forcedLimit.nextAvailableAt > nowSec();
+        if (!forcedLimited) {
+          debugLog(`session=${sessionKey} override=${forced} reason=immediate-failover-cache`);
+          return { modelOverride: forced };
+        }
+        sessionForcedModel.delete(sessionKey);
+        debugLog(`session=${sessionKey} cleared-stale-forced-model=${forced}`);
+      }
+    }
+
     const pinned = getPinnedModel(ctx?.sessionKey);
 
     if (forceOverride) {
+      debugLog(`session=${ctx?.sessionKey ?? "n/a"} override=${chosen} reason=forceOverride`);
       return { modelOverride: chosen };
     }
 
     if (!pinned) {
       // no pin info; be conservative and don't override
+      debugLog(`session=${ctx?.sessionKey ?? "n/a"} no-override reason=no-pinned-model`);
       return;
+    }
+
+    const copilotEnabled = isCopilotEnabledNow();
+    const pinnedUnavailable =
+      !order.includes(pinned) ||
+      (pinned.startsWith("github-copilot/") && !copilotEnabled);
+
+    if (pinnedUnavailable && chosen !== pinned) {
+      debugLog(`session=${ctx?.sessionKey ?? "n/a"} override=${chosen} reason=pinned-unavailable pinned=${pinned}`);
+      return { modelOverride: chosen };
     }
 
     const lim = state.limited[pinned];
     const isLimited = !!lim && lim.nextAvailableAt > nowSec();
     if (!isLimited) {
+      debugLog(`session=${ctx?.sessionKey ?? "n/a"} no-override reason=pinned-available pinned=${pinned}`);
       return;
     }
 
     // pinned is limited -> switch to next available
     if (chosen !== pinned) {
+      debugLog(`session=${ctx?.sessionKey ?? "n/a"} override=${chosen} reason=pinned-limited pinned=${pinned}`);
       return { modelOverride: chosen };
     }
+
+    debugLog(`session=${ctx?.sessionKey ?? "n/a"} no-override reason=chosen-equals-pinned pinned=${pinned}`);
   });
 
   // 2) When agent ends with rate limit: mark current model limited + patch session pin.
@@ -301,21 +367,29 @@ export default function register(api: any) {
 
     const isRate = isRateLimitLike(err);
     const isAuth = isAuthOrScopeLike(err);
-    if (!isRate && !isAuth) return;
+    const isUnavailable = isTemporarilyUnavailableLike(err);
+    if (!isRate && !isAuth && !isUnavailable) return;
 
     const currentModel = ctx?.model || ctx?.modelId || undefined;
+    if (typeof currentModel !== "string" || currentModel.length === 0) {
+      api.logger?.warn?.("[model-failover] Could not determine failed model from context; skipping limitation update.");
+      return;
+    }
+
     const state = loadState(statePath);
 
     const hitAt = nowSec();
 
     const order = effectiveOrder();
-    const key = (typeof currentModel === "string" && currentModel.length > 0) ? currentModel : order[0];
+    const key = currentModel;
 
     // Detect provider-wide exhaustion (generic)
     const provider = key.split("/")[0];
 
     // Auth/scope errors shouldn't be retried aggressively.
-    const defaultCooldownMin = isAuth ? Math.max(cooldownMinutes, 12 * 60) : cooldownMinutes;
+    const defaultCooldownMin = isAuth
+      ? Math.max(cooldownMinutes, 12 * 60)
+      : (isUnavailable ? unavailableCooldownMinutes : cooldownMinutes);
     const nextAvail = hitAt + calculateCooldown(provider, err, defaultCooldownMin);
 
     // If it looks like a provider prefix (no spaces, has slash), assume provider-wide block for rate limits
@@ -348,12 +422,17 @@ export default function register(api: any) {
 
     const fallback = firstAvailableModel(order, state);
 
+    if (ctx?.sessionKey && fallback) {
+      sessionForcedModel.set(ctx.sessionKey, fallback);
+      debugLog(`session=${ctx.sessionKey} queued-failover=${fallback} source=agent_end provider=${provider}`);
+    }
+
     if (patchPins && ctx?.sessionKey && fallback) {
       patchSessionModel(ctx.sessionKey, fallback, api.logger);
     }
 
     if (notifyOnSwitch && ctx?.sessionKey && fallback) {
-      const why = isAuth ? "auth/scope error" : "rate limit";
+      const why = isAuth ? "auth/scope error" : (isUnavailable ? "temporary unavailability" : "rate limit");
       api.logger?.warn?.(`[model-failover] ${why} detected. Switched future turns to ${fallback} (sessionKey=${ctx.sessionKey}).`);
     }
   });
@@ -362,20 +441,25 @@ export default function register(api: any) {
   api.on("message_sent", (event: any, ctx: any) => {
     const content = (event?.content ?? "") as string;
     if (!content) return;
-    if (!isRateLimitLike(content) && !content.includes("API rate limit reached")) return;
+    const isRate = isRateLimitLike(content) || content.includes("API rate limit reached");
+    const isUnavailable = isTemporarilyUnavailableLike(content);
+    if (!isRate && !isUnavailable) return;
 
     const state = loadState(statePath);
     const order = effectiveOrder();
 
-    // Assume current model from context if available, else first in effective order
-    const currentModel = String(ctx?.model || ctx?.modelId || order[0] || modelOrder[0]);
+    // Only limit if we can identify the real current model.
+    const currentModelRaw = ctx?.model || ctx?.modelId;
+    if (typeof currentModelRaw !== "string" || currentModelRaw.length === 0) return;
+    const currentModel = currentModelRaw;
     const provider = currentModel.split("/")[0];
 
     const hitAt = nowSec();
-    const nextAvail = hitAt + calculateCooldown(provider, content, cooldownMinutes);
+    const defaultCooldown = isUnavailable ? unavailableCooldownMinutes : cooldownMinutes;
+    const nextAvail = hitAt + calculateCooldown(provider, content, defaultCooldown);
 
     // Provider-wide block (generic) for observed rate-limit messages
-    const isProviderWide = provider.length > 0;
+    const isProviderWide = isRate && provider.length > 0;
     if (isProviderWide) {
       for (const m of order) {
         if (m.startsWith(provider + "/")) {
@@ -397,6 +481,10 @@ export default function register(api: any) {
     saveState(statePath, state);
 
     const fallback = firstAvailableModel(order, state);
+    if (ctx?.sessionKey && fallback) {
+      sessionForcedModel.set(ctx.sessionKey, fallback);
+      debugLog(`session=${ctx.sessionKey} queued-failover=${fallback} source=message_sent provider=${provider}`);
+    }
     if (patchPins && ctx?.sessionKey && fallback) {
       patchSessionModel(ctx.sessionKey, fallback, api.logger);
     }

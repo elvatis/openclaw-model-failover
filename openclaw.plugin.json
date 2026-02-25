@@ -33,6 +33,12 @@
         "default": 300,
         "minimum": 1
       },
+      "unavailableCooldownMinutes": {
+        "type": "number",
+        "description": "How long a model is considered limited after temporary unavailability/cooldown errors (e.g. copilot-proxy cooldown).",
+        "default": 15,
+        "minimum": 1
+      },
       "stateFile": {
         "type": "string",
         "description": "Path to JSON state file (default: <workspace>/memory/model-ratelimits.json)",
@@ -47,6 +53,18 @@
         "type": "boolean",
         "description": "If true, send a short message when a switch happens.",
         "default": true
+      },
+      "debugLogging": {
+        "type": "boolean",
+        "description": "If true, logs detailed model-selection and failover decisions for each turn.",
+        "default": false
+      },
+      "debugLogSampleRate": {
+        "type": "number",
+        "description": "Sampling rate for debug logs from 0.0 to 1.0 (1.0 = log all debug events).",
+        "default": 1,
+        "minimum": 0,
+        "maximum": 1
       },
       "forceOverride": {
         "type": "boolean",
