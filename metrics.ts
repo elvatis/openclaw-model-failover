@@ -424,6 +424,79 @@ export function getModelHistory(opts: {
 }
 
 // -------------------------------------------------------------------------
+// Convenience: record a rate-limit detection
+// -------------------------------------------------------------------------
+
+/**
+ * Record a rate-limit event with all required fields.
+ * This is a convenience wrapper around recordEvent for use when a rate limit
+ * is detected in the failover plugin.
+ */
+export function recordRateLimit(
+  metricsPath: string,
+  opts: {
+    model: string;
+    provider: string;
+    cooldownSec: number;
+    reason?: string;
+    trigger?: string;
+    session?: string;
+  },
+): void {
+  recordEvent(metricsPath, {
+    ts: nowSec(),
+    type: "rate_limit",
+    model: opts.model,
+    provider: opts.provider,
+    cooldownSec: opts.cooldownSec,
+    reason: opts.reason,
+    trigger: opts.trigger,
+    session: opts.session,
+  });
+}
+
+// -------------------------------------------------------------------------
+// Query: unified metrics query for /failover-status command
+// -------------------------------------------------------------------------
+
+export interface MetricsQueryResult {
+  summary: MetricsSummary;
+  modelHistories: Record<string, ModelHistory>;
+}
+
+/**
+ * Query metrics for the /failover-status command.
+ * Returns both the aggregate summary and per-model histories for all models
+ * that have recorded events.
+ */
+export function queryMetrics(opts?: {
+  metricsPath?: string;
+  since?: number;
+  until?: number;
+  maxRecentCooldowns?: number;
+}): MetricsQueryResult {
+  const metricsPath = opts?.metricsPath ?? DEFAULT_METRICS_FILE;
+  const summary = getMetricsSummary({
+    metricsPath,
+    since: opts?.since,
+    until: opts?.until,
+    maxRecentCooldowns: opts?.maxRecentCooldowns,
+  });
+
+  const modelHistories: Record<string, ModelHistory> = {};
+  for (const model of Object.keys(summary.models)) {
+    modelHistories[model] = getModelHistory({
+      model,
+      metricsPath,
+      since: opts?.since,
+      until: opts?.until,
+    });
+  }
+
+  return { summary, modelHistories };
+}
+
+// -------------------------------------------------------------------------
 // Reset
 // -------------------------------------------------------------------------
 

@@ -53,7 +53,7 @@
       "summary": "2-agent pipeline: Implementer + Reviewer."
     }
   },
-  "quick_context": "openclaw-model-failover v0.2.0 production. 160 unit tests (vitest) covering all exported utilities, register() handler logic, DST transitions, status inspection, atomic state writes, usage metrics, and per-model cooldown history. metrics.ts provides append-only JSONL event log with per-model/per-provider aggregation, getModelHistory() for detailed per-model cooldown timeline with avg/max/total stats, failover relationship tracking (failed-to/received-from), and CLI history subcommand.",
+  "quick_context": "openclaw-model-failover v0.2.0 production. 179 unit tests (vitest) covering all exported utilities, register() handler logic, DST transitions, status inspection, atomic state writes, usage metrics with per-model/per-provider avgCooldownSec/cooldownCount/recentCooldowns, per-model cooldown history, recordRateLimit convenience, and queryMetrics unified query. metrics.ts provides append-only JSONL event log with per-model/per-provider aggregation, getModelHistory() for detailed per-model cooldown timeline, failover relationship tracking, and CLI history subcommand.",
   "token_budget": {
     "manifest_only": 85,
     "manifest_plus_core": 320,

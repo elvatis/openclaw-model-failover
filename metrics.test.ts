@@ -4,9 +4,11 @@ import path from "node:path";
 import os from "node:os";
 import {
   recordEvent,
+  recordRateLimit,
   loadEvents,
   getMetricsSummary,
   getModelHistory,
+  queryMetrics,
   resetMetrics,
   formatMetrics,
   formatEvents,
@@ -14,6 +16,7 @@ import {
   DEFAULT_METRICS_FILE,
   type MetricEvent,
   type MetricsSummary,
+  type MetricsQueryResult,
   type ModelHistory,
 } from "./metrics.js";
 import { nowSec } from "./index.js";
@@ -202,6 +205,52 @@ describe("getMetricsSummary - aggregation", () => {
     const summary = getMetricsSummary({ metricsPath });
     expect(summary.models["provA/model1"].totalCooldownSec).toBe(3000);
     expect(summary.providers["provA"].totalCooldownSec).toBe(3000);
+  });
+
+  it("computes per-model and per-provider cooldownCount and avgCooldownSec", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, cooldownSec: 1000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, cooldownSec: 3000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 300, cooldownSec: undefined }));
+
+    const summary = getMetricsSummary({ metricsPath });
+    // Only events with cooldownSec are counted
+    expect(summary.models["provA/model1"].cooldownCount).toBe(2);
+    expect(summary.models["provA/model1"].avgCooldownSec).toBe(2000);
+    expect(summary.providers["provA"].cooldownCount).toBe(2);
+    expect(summary.providers["provA"].avgCooldownSec).toBe(2000);
+  });
+
+  it("computes overall avgCooldownSec across all models", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, model: "provA/m1", provider: "provA", cooldownSec: 1000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, model: "provB/m2", provider: "provB", cooldownSec: 3000 }));
+
+    const summary = getMetricsSummary({ metricsPath });
+    expect(summary.avgCooldownSec).toBe(2000);
+  });
+
+  it("collects recentCooldowns from error events with cooldownSec", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, cooldownSec: 1000, reason: "rate limit" }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, type: "auth_error", cooldownSec: 2000, reason: "bad key" }));
+    recordEvent(metricsPath, sampleEvent({ ts: 300, type: "failover", to: "provB/m2" })); // no cooldown
+
+    const summary = getMetricsSummary({ metricsPath });
+    expect(summary.recentCooldowns).toHaveLength(2);
+    expect(summary.recentCooldowns[0].startedAt).toBe(100);
+    expect(summary.recentCooldowns[0].type).toBe("rate_limit");
+    expect(summary.recentCooldowns[1].startedAt).toBe(200);
+    expect(summary.recentCooldowns[1].type).toBe("auth_error");
+  });
+
+  it("limits recentCooldowns via maxRecentCooldowns option", () => {
+    for (let i = 0; i < 5; i++) {
+      recordEvent(metricsPath, sampleEvent({ ts: 100 + i, cooldownSec: 1000 }));
+    }
+
+    const summary = getMetricsSummary({ metricsPath, maxRecentCooldowns: 3 });
+    expect(summary.recentCooldowns).toHaveLength(3);
+    // Should be the last 3 entries
+    expect(summary.recentCooldowns[0].startedAt).toBe(102);
+    expect(summary.recentCooldowns[2].startedAt).toBe(104);
   });
 
   it("tracks lastHitAt as the latest timestamp for each model", () => {
@@ -852,5 +901,212 @@ describe("formatModelHistory", () => {
     expect(output).toContain("Received failovers from:");
     expect(output).toContain("<- provA/model1");
     expect(output).not.toContain("No events recorded for this model.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. getMetricsSummary - per-model/provider cooldown stats
+// ---------------------------------------------------------------------------
+describe("getMetricsSummary - cooldown stats", () => {
+  it("computes avgCooldownSec and cooldownCount per model", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, cooldownSec: 1000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, cooldownSec: 3000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 300, model: "provA/model2", cooldownSec: 2000 }));
+
+    const summary = getMetricsSummary({ metricsPath });
+
+    expect(summary.models["provA/model1"].cooldownCount).toBe(2);
+    expect(summary.models["provA/model1"].avgCooldownSec).toBe(2000);
+    expect(summary.models["provA/model2"].cooldownCount).toBe(1);
+    expect(summary.models["provA/model2"].avgCooldownSec).toBe(2000);
+  });
+
+  it("computes avgCooldownSec and cooldownCount per provider", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, cooldownSec: 1000, model: "provA/m1", provider: "provA" }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, cooldownSec: 3000, model: "provA/m2", provider: "provA" }));
+    recordEvent(metricsPath, sampleEvent({ ts: 300, cooldownSec: 6000, model: "provB/m3", provider: "provB" }));
+
+    const summary = getMetricsSummary({ metricsPath });
+
+    expect(summary.providers["provA"].cooldownCount).toBe(2);
+    expect(summary.providers["provA"].avgCooldownSec).toBe(2000);
+    expect(summary.providers["provB"].cooldownCount).toBe(1);
+    expect(summary.providers["provB"].avgCooldownSec).toBe(6000);
+  });
+
+  it("computes global avgCooldownSec across all events", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, cooldownSec: 1000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, cooldownSec: 3000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 300, cooldownSec: 2000, model: "provB/m2", provider: "provB" }));
+
+    const summary = getMetricsSummary({ metricsPath });
+    // (1000 + 3000 + 2000) / 3 = 2000
+    expect(summary.avgCooldownSec).toBe(2000);
+  });
+
+  it("returns avgCooldownSec=0 when no cooldowns recorded", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, type: "failover", to: "provB/m2" }));
+
+    const summary = getMetricsSummary({ metricsPath });
+    expect(summary.avgCooldownSec).toBe(0);
+  });
+
+  it("returns zero avgCooldownSec for model with only failover events", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, type: "failover", to: "provB/m2" }));
+
+    const summary = getMetricsSummary({ metricsPath });
+    expect(summary.models["provA/model1"].cooldownCount).toBe(0);
+    expect(summary.models["provA/model1"].avgCooldownSec).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16. getMetricsSummary - recentCooldowns
+// ---------------------------------------------------------------------------
+describe("getMetricsSummary - recentCooldowns", () => {
+  it("includes recent cooldown entries with timestamps", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, cooldownSec: 1000, reason: "first" }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, cooldownSec: 2000, reason: "second" }));
+
+    const summary = getMetricsSummary({ metricsPath });
+
+    expect(summary.recentCooldowns).toHaveLength(2);
+    expect(summary.recentCooldowns[0].startedAt).toBe(100);
+    expect(summary.recentCooldowns[0].durationSec).toBe(1000);
+    expect(summary.recentCooldowns[0].reason).toBe("first");
+    expect(summary.recentCooldowns[1].startedAt).toBe(200);
+    expect(summary.recentCooldowns[1].durationSec).toBe(2000);
+  });
+
+  it("limits recentCooldowns to maxRecentCooldowns", () => {
+    for (let i = 0; i < 10; i++) {
+      recordEvent(metricsPath, sampleEvent({ ts: 100 + i, cooldownSec: 1000 + i }));
+    }
+
+    const summary = getMetricsSummary({ metricsPath, maxRecentCooldowns: 3 });
+
+    expect(summary.recentCooldowns).toHaveLength(3);
+    // Should keep the last 3
+    expect(summary.recentCooldowns[0].startedAt).toBe(107);
+    expect(summary.recentCooldowns[1].startedAt).toBe(108);
+    expect(summary.recentCooldowns[2].startedAt).toBe(109);
+  });
+
+  it("defaults to 50 max recent cooldowns", () => {
+    for (let i = 0; i < 60; i++) {
+      recordEvent(metricsPath, sampleEvent({ ts: 100 + i, cooldownSec: 1000 }));
+    }
+
+    const summary = getMetricsSummary({ metricsPath });
+    expect(summary.recentCooldowns).toHaveLength(50);
+  });
+
+  it("excludes failover events from recentCooldowns", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, cooldownSec: 1000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, type: "failover", to: "provB/m2" }));
+    recordEvent(metricsPath, sampleEvent({ ts: 300, cooldownSec: 2000 }));
+
+    const summary = getMetricsSummary({ metricsPath });
+    expect(summary.recentCooldowns).toHaveLength(2);
+    expect(summary.recentCooldowns[0].startedAt).toBe(100);
+    expect(summary.recentCooldowns[1].startedAt).toBe(300);
+  });
+
+  it("returns empty recentCooldowns when no cooldowns exist", () => {
+    const summary = getMetricsSummary({
+      metricsPath: path.join(tmpDir, "empty.jsonl"),
+    });
+    expect(summary.recentCooldowns).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17. recordRateLimit convenience function
+// ---------------------------------------------------------------------------
+describe("recordRateLimit", () => {
+  it("records a rate_limit event with all fields", () => {
+    recordRateLimit(metricsPath, {
+      model: "provA/model1",
+      provider: "provA",
+      cooldownSec: 3600,
+      reason: "429 Too Many Requests",
+      trigger: "agent_end",
+      session: "sess-abc",
+    });
+
+    const events = loadEvents(metricsPath);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("rate_limit");
+    expect(events[0].model).toBe("provA/model1");
+    expect(events[0].provider).toBe("provA");
+    expect(events[0].cooldownSec).toBe(3600);
+    expect(events[0].reason).toBe("429 Too Many Requests");
+    expect(events[0].trigger).toBe("agent_end");
+    expect(events[0].session).toBe("sess-abc");
+    expect(events[0].ts).toBeGreaterThan(0);
+  });
+
+  it("records without optional fields", () => {
+    recordRateLimit(metricsPath, {
+      model: "provA/model1",
+      provider: "provA",
+      cooldownSec: 1800,
+    });
+
+    const events = loadEvents(metricsPath);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBeUndefined();
+    expect(events[0].trigger).toBeUndefined();
+    expect(events[0].session).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 18. queryMetrics - unified query for /failover-status
+// ---------------------------------------------------------------------------
+describe("queryMetrics", () => {
+  it("returns both summary and per-model histories", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, model: "provA/m1", provider: "provA", cooldownSec: 1000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, model: "provB/m2", provider: "provB", cooldownSec: 2000 }));
+    recordEvent(metricsPath, sampleEvent({
+      ts: 300,
+      type: "failover",
+      model: "provA/m1",
+      provider: "provA",
+      to: "provB/m2",
+    }));
+
+    const result = queryMetrics({ metricsPath });
+
+    // Summary
+    expect(result.summary.totalEvents).toBe(3);
+    expect(result.summary.totalRateLimits).toBe(2);
+    expect(result.summary.totalFailovers).toBe(1);
+
+    // Model histories
+    expect(Object.keys(result.modelHistories)).toHaveLength(2);
+    expect(result.modelHistories["provA/m1"]).toBeDefined();
+    expect(result.modelHistories["provA/m1"].totalErrors).toBe(1);
+    expect(result.modelHistories["provA/m1"].failedToModels["provB/m2"]).toBe(1);
+    expect(result.modelHistories["provB/m2"]).toBeDefined();
+    expect(result.modelHistories["provB/m2"].totalErrors).toBe(1);
+  });
+
+  it("returns empty result when no events exist", () => {
+    const result = queryMetrics({ metricsPath: path.join(tmpDir, "empty.jsonl") });
+
+    expect(result.summary.totalEvents).toBe(0);
+    expect(Object.keys(result.modelHistories)).toHaveLength(0);
+  });
+
+  it("respects time filtering", () => {
+    recordEvent(metricsPath, sampleEvent({ ts: 100, cooldownSec: 1000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 200, cooldownSec: 2000 }));
+    recordEvent(metricsPath, sampleEvent({ ts: 300, cooldownSec: 3000 }));
+
+    const result = queryMetrics({ metricsPath, since: 200, until: 300 });
+
+    expect(result.summary.totalEvents).toBe(2);
+    expect(result.modelHistories["provA/model1"].events).toHaveLength(2);
   });
 });
