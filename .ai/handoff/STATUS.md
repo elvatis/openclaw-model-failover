@@ -1,6 +1,6 @@
 # openclaw-model-failover: Current State of the Nation
 
-> Last updated: 2026-02-27 by claude-opus-4-6 (T-004: Add failover status inspection)
+> Last updated: 2026-02-27 by claude-opus-4-6 (T-005: Atomic state file writes)
 > Commit: pending
 >
 > **Rule:** This file is rewritten (not appended) at the end of every session.
@@ -9,7 +9,7 @@
 ---
 
 <!-- SECTION: summary -->
-v0.1.6 production with auto-gateway-restart on failover. 102 vitest unit tests covering all exported utilities, register() handler logic (before_model_resolve, agent_end, message_sent), DST transition edge cases, and status inspection (getFailoverStatus, clearModel, clearAllModels, formatDuration, formatStatus). New status.ts module provides CLI and programmatic access to failover state.
+v0.1.6 production with auto-gateway-restart on failover. 105 vitest unit tests covering all exported utilities, register() handler logic (before_model_resolve, agent_end, message_sent), DST transition edge cases, status inspection (getFailoverStatus, clearModel, clearAllModels, formatDuration, formatStatus), and atomic state file writes. saveState() uses temp-file + rename pattern for crash-safe persistence.
 <!-- /SECTION: summary -->
 
 <!-- SECTION: build_health -->
@@ -17,7 +17,7 @@ v0.1.6 production with auto-gateway-restart on failover. 102 vitest unit tests c
 
 | Check | Result | Notes |
 |-------|--------|-------|
-| `npm test` | Pass (102 tests) | All utilities + handlers + DST transitions + status inspection tested via vitest |
+| `npm test` | Pass (105 tests) | All utilities + handlers + DST transitions + status inspection + atomic writes tested via vitest |
 | `npm run build` | Pass | tsc --noEmit clean |
 | `lint` | N/A | Not configured |
 
@@ -31,7 +31,7 @@ v0.1.6 production with auto-gateway-restart on failover. 102 vitest unit tests c
 - **Version:** 0.1.6
 - **CI:** None configured
 - **Production:** Active as OpenClaw plugin
-- **v0.2 Roadmap:** IN PROGRESS - T-001, T-002, T-003, T-004 done
+- **v0.2 Roadmap:** IN PROGRESS - T-001 through T-005 done
 
 ## Key Features (v0.1.6)
 
@@ -45,6 +45,7 @@ v0.1.6 production with auto-gateway-restart on failover. 102 vitest unit tests c
 - Supports 40+ LLM failover: Anthropic, OpenAI, Google, GitHub Copilot, Perplexity
 - DST-aware midnight PT calculation (tries both UTC-7 and UTC-8 offsets)
 - **Status inspection CLI** (`npx tsx status.ts`) with pretty-print, JSON, and clear commands
+- **Atomic state writes** - temp-file + rename prevents corruption on crash
 
 <!-- /SECTION: current_state -->
 
@@ -58,7 +59,7 @@ v0.1.6 production with auto-gateway-restart on failover. 102 vitest unit tests c
 | ~~Real unit tests~~ | ~~DONE~~ | [#1](https://github.com/homeofe/openclaw-model-failover/issues/1) | 81 vitest tests covering utilities + handlers + DST |
 | ~~DST bug~~ | ~~DONE~~ | [#2](https://github.com/homeofe/openclaw-model-failover/issues/2) | getNextMidnightPT now tries both offsets, verified with DST transition tests |
 | ~~Status inspection~~ | ~~DONE~~ | [#3](https://github.com/homeofe/openclaw-model-failover/issues/3) | status.ts with CLI + programmatic API, 21 tests |
-| Atomic writes | MEDIUM | [#4](https://github.com/homeofe/openclaw-model-failover/issues/4) | State file can corrupt under concurrent access |
+| ~~Atomic writes~~ | ~~DONE~~ | [#4](https://github.com/homeofe/openclaw-model-failover/issues/4) | saveState() uses temp-file + rename for crash-safe writes |
 | Usage metrics | LOW | [#5](https://github.com/homeofe/openclaw-model-failover/issues/5) | No historical data for capacity planning |
 
 <!-- /SECTION: what_is_missing -->

@@ -203,7 +203,16 @@ export function loadState(statePath: string): LimitState {
 
 export function saveState(statePath: string, state: LimitState) {
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  // Atomic write: write to temp file, then rename over the target.
+  // This prevents corruption if the process crashes mid-write.
+  const tmpPath = statePath + ".tmp";
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+    fs.renameSync(tmpPath, statePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
 }
 
 export function firstAvailableModel(order: string[], state: LimitState): string | undefined {

@@ -471,6 +471,59 @@ describe("loadState / saveState", () => {
     saveState(deepPath, state);
     expect(fs.existsSync(deepPath)).toBe(true);
   });
+
+  it("does not leave a .tmp file after successful save (atomic write)", () => {
+    const state: LimitState = {
+      limited: {
+        "test/model": { lastHitAt: 1000, nextAvailableAt: 2000 },
+      },
+    };
+    saveState(tmpFile, state);
+    expect(fs.existsSync(tmpFile)).toBe(true);
+    expect(fs.existsSync(tmpFile + ".tmp")).toBe(false);
+  });
+
+  it("preserves existing state file when write of temp file fails", () => {
+    // Save initial valid state
+    const original: LimitState = {
+      limited: {
+        "openai/gpt-4": { lastHitAt: 100, nextAvailableAt: 200 },
+      },
+    };
+    saveState(tmpFile, original);
+
+    // Attempt to save to an unwritable temp path by making the directory read-only.
+    // Use a subdirectory so we can control permissions.
+    const subDir = path.join(tmpDir, "readonly");
+    const subFile = path.join(subDir, "state.json");
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.writeFileSync(subFile, JSON.stringify(original, null, 2));
+
+    // Make the .tmp target unwritable by placing a directory at .tmp path
+    fs.mkdirSync(subFile + ".tmp", { recursive: true });
+
+    expect(() =>
+      saveState(subFile, { limited: { "broken/m": { lastHitAt: 1, nextAvailableAt: 2 } } })
+    ).toThrow();
+
+    // Original file should remain intact
+    const preserved = loadState(subFile);
+    expect(preserved).toEqual(original);
+  });
+
+  it("overwrites existing state file atomically", () => {
+    const state1: LimitState = {
+      limited: { "m/a": { lastHitAt: 1, nextAvailableAt: 2 } },
+    };
+    const state2: LimitState = {
+      limited: { "m/b": { lastHitAt: 3, nextAvailableAt: 4 } },
+    };
+    saveState(tmpFile, state1);
+    saveState(tmpFile, state2);
+    const loaded = loadState(tmpFile);
+    expect(loaded).toEqual(state2);
+    expect(loaded.limited["m/a"]).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
