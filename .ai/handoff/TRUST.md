@@ -18,9 +18,9 @@
 
 | Property | Status | Last Verified | TTL | Expires | Agent | Notes |
 |----------|--------|---------------|-----|---------|-------|-------|
-| `npm run build` passes | untested | - | - | - | - | Not verified recently |
-| `npm test` passes | untested | - | - | - | - | Script exists, no tests written |
-| TypeScript compiles | assumed | 2026-02-25 | 7d | 2026-03-04 | - | Last commit shows no TS errors mentioned |
+| `npm run build` passes | verified | 2026-02-27 | 7d | 2026-03-06 | claude-opus-4-6 | tsc --noEmit clean |
+| `npm test` passes | verified | 2026-02-27 | 7d | 2026-03-06 | claude-opus-4-6 | 73 tests, all passing |
+| TypeScript compiles | verified | 2026-02-27 | 7d | 2026-03-06 | claude-opus-4-6 | Strict mode, no errors |
 
 ---
 
@@ -28,10 +28,11 @@
 
 | Property | Status | Last Verified | TTL | Expires | Agent | Notes |
 |----------|--------|---------------|-----|---------|-------|-------|
-| Copilot-proxy cooldown detected | assumed | 2026-02-25 | 14d | 2026-03-11 | - | Code reviewed, logic matches intent |
-| In-memory session override works | assumed | 2026-02-25 | 14d | 2026-03-11 | - | Code reviewed |
-| 40+ LLM failover cycles | untested | - | - | - | - | No automated test |
-| Provider-wide blocking correct | assumed | 2026-02-25 | 14d | 2026-03-11 | - | Bug fix in last commit |
+| Copilot-proxy cooldown detected | verified | 2026-02-27 | 14d | 2026-03-13 | claude-opus-4-6 | Tested in agent_end + copilot filtering tests |
+| In-memory session override works | verified | 2026-02-27 | 14d | 2026-03-13 | claude-opus-4-6 | Tested in before_model_resolve handler tests |
+| Failover cascade across providers | verified | 2026-02-27 | 14d | 2026-03-13 | claude-opus-4-6 | End-to-end cascade test (section 19) |
+| Provider-wide blocking correct | verified | 2026-02-27 | 14d | 2026-03-13 | claude-opus-4-6 | Tested in agent_end + message_sent handlers |
+| Gateway restart scheduling | verified | 2026-02-27 | 14d | 2026-03-13 | claude-opus-4-6 | Tested with fake timers + spawn mock |
 
 ---
 

@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import {
+import { spawn } from "node:child_process";
+import register, {
   nowSec,
   getNextMidnightPT,
   getNextMidnightUTC,
@@ -17,6 +18,10 @@ import {
   expandHome,
   type LimitState,
 } from "./index.js";
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(() => ({ unref: vi.fn() })),
+}));
 
 // ---------------------------------------------------------------------------
 // 1. Rate-limit detection
@@ -419,5 +424,625 @@ describe("provider-wide blocking", () => {
     // firstAvailableModel should skip the blocked provider
     const fallback = firstAvailableModel(modelOrder, state);
     expect(fallback).toBe("anthropic/claude-opus");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helpers for register() integration tests
+// ---------------------------------------------------------------------------
+function createMockApi(opts: {
+  pluginConfig?: Record<string, any>;
+  gatewayConfig?: any;
+} = {}) {
+  const handlers: Record<string, Function> = {};
+  const logs: string[] = [];
+
+  const api: any = {
+    pluginConfig: opts.pluginConfig ?? {},
+    logger: {
+      info: (msg: string) => logs.push(msg),
+      warn: (msg: string) => logs.push(msg),
+    },
+    on: vi.fn((event: string, handler: Function) => {
+      handlers[event] = handler;
+    }),
+    runtime: {
+      config: {
+        loadConfig: vi.fn(() => opts.gatewayConfig ?? null),
+      },
+    },
+  };
+
+  return { api, handlers, logs };
+}
+
+function writeSessionsJson(homeDir: string, data: Record<string, any>) {
+  const dir = path.join(homeDir, ".openclaw", "agents", "main", "sessions");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "sessions.json"), JSON.stringify(data));
+}
+
+// ---------------------------------------------------------------------------
+// 13. register() - Plugin registration basics
+// ---------------------------------------------------------------------------
+describe("register()", () => {
+  let tmpDir: string;
+  let statePath: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fo-reg-"));
+    statePath = path.join(tmpDir, "state.json");
+    fakeHome = path.join(tmpDir, "home");
+    fs.mkdirSync(fakeHome, { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    vi.mocked(spawn).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("does not register handlers when enabled=false", () => {
+    const { api } = createMockApi({ pluginConfig: { enabled: false } });
+    register(api);
+    expect(api.on).not.toHaveBeenCalled();
+  });
+
+  it("registers before_model_resolve, agent_end, and message_sent handlers", () => {
+    const { api } = createMockApi({
+      pluginConfig: { stateFile: statePath, restartOnSwitch: false },
+    });
+    register(api);
+    const events = api.on.mock.calls.map((c: any[]) => c[0]);
+    expect(events).toContain("before_model_resolve");
+    expect(events).toContain("agent_end");
+    expect(events).toContain("message_sent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. before_model_resolve handler
+// ---------------------------------------------------------------------------
+describe("before_model_resolve handler", () => {
+  const models = ["modelA/one", "modelB/two", "modelC/three"];
+  let tmpDir: string;
+  let statePath: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fo-bmr-"));
+    statePath = path.join(tmpDir, "state.json");
+    fakeHome = path.join(tmpDir, "home");
+    fs.mkdirSync(fakeHome, { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    vi.mocked(spawn).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function setup(pluginConfig: Record<string, any> = {}) {
+    const cfg = {
+      stateFile: statePath,
+      modelOrder: models,
+      restartOnSwitch: false,
+      ...pluginConfig,
+    };
+    const { api, handlers, logs } = createMockApi({ pluginConfig: cfg });
+    register(api);
+    return { handlers, logs };
+  }
+
+  it("returns no override when there is no pinned model", () => {
+    const { handlers } = setup();
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns override when forceOverride is true", () => {
+    const { handlers } = setup({ forceOverride: true });
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toEqual({ modelOverride: "modelA/one" });
+  });
+
+  it("returns no override when pinned model is available", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "modelA/one" } });
+    const { handlers } = setup();
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toBeUndefined();
+  });
+
+  it("overrides when pinned model is rate-limited", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "modelA/one" } });
+    const state: LimitState = {
+      limited: {
+        "modelA/one": {
+          lastHitAt: nowSec(),
+          nextAvailableAt: nowSec() + 3600,
+          reason: "rate limit",
+        },
+      },
+    };
+    saveState(statePath, state);
+    const { handlers } = setup();
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toEqual({ modelOverride: "modelB/two" });
+  });
+
+  it("skips multiple limited models to find fallback", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "modelA/one" } });
+    const state: LimitState = {
+      limited: {
+        "modelA/one": {
+          lastHitAt: nowSec(),
+          nextAvailableAt: nowSec() + 3600,
+        },
+        "modelB/two": {
+          lastHitAt: nowSec(),
+          nextAvailableAt: nowSec() + 3600,
+        },
+      },
+    };
+    saveState(statePath, state);
+    const { handlers } = setup();
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toEqual({ modelOverride: "modelC/three" });
+  });
+
+  it("overrides when pinned model is not in model order", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "unknown/model" } });
+    const { handlers } = setup();
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toEqual({ modelOverride: "modelA/one" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. agent_end handler
+// ---------------------------------------------------------------------------
+describe("agent_end handler", () => {
+  const models = [
+    "provA/model1",
+    "provA/model2",
+    "provB/model3",
+    "provC/model4",
+  ];
+  let tmpDir: string;
+  let statePath: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fo-ae-"));
+    statePath = path.join(tmpDir, "state.json");
+    fakeHome = path.join(tmpDir, "home");
+    fs.mkdirSync(fakeHome, { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    vi.mocked(spawn).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function setup(pluginConfig: Record<string, any> = {}) {
+    const cfg = {
+      stateFile: statePath,
+      modelOrder: models,
+      restartOnSwitch: false,
+      ...pluginConfig,
+    };
+    const { api, handlers, logs } = createMockApi({ pluginConfig: cfg });
+    register(api);
+    return { handlers, logs };
+  }
+
+  it("ignores successful events", () => {
+    const { handlers } = setup();
+    handlers["agent_end"]({ success: true }, { model: "provA/model1", sessionKey: "s1" });
+    const state = loadState(statePath);
+    expect(Object.keys(state.limited)).toHaveLength(0);
+  });
+
+  it("ignores non-rate-limit/non-auth errors", () => {
+    const { handlers } = setup();
+    handlers["agent_end"](
+      { success: false, error: "Connection timeout" },
+      { model: "provA/model1", sessionKey: "s1" }
+    );
+    const state = loadState(statePath);
+    expect(Object.keys(state.limited)).toHaveLength(0);
+  });
+
+  it("blocks all models from same provider on rate limit", () => {
+    const { handlers } = setup();
+    handlers["agent_end"](
+      { success: false, error: "429 Too Many Requests" },
+      { model: "provA/model1", sessionKey: "s1" }
+    );
+    const state = loadState(statePath);
+    expect(state.limited["provA/model1"]).toBeDefined();
+    expect(state.limited["provA/model2"]).toBeDefined();
+    expect(state.limited["provB/model3"]).toBeUndefined();
+    expect(state.limited["provC/model4"]).toBeUndefined();
+  });
+
+  it("blocks only the specific model on auth error (not provider-wide)", () => {
+    const { handlers } = setup();
+    handlers["agent_end"](
+      { success: false, error: "HTTP 401 Unauthorized" },
+      { model: "provA/model1", sessionKey: "s1" }
+    );
+    const state = loadState(statePath);
+    expect(state.limited["provA/model1"]).toBeDefined();
+    expect(state.limited["provA/model2"]).toBeUndefined();
+  });
+
+  it("uses shorter cooldown for unavailable errors", () => {
+    const { handlers } = setup({ unavailableCooldownMinutes: 10, cooldownMinutes: 300 });
+    handlers["agent_end"](
+      { success: false, error: "plugin is in cooldown" },
+      { model: "provA/model1", sessionKey: "s1" }
+    );
+    const state = loadState(statePath);
+    const entry = state.limited["provA/model1"];
+    expect(entry).toBeDefined();
+    const cooldownSec = entry!.nextAvailableAt - entry!.lastHitAt;
+    // unavailableCooldownMinutes = 10 -> 600 seconds
+    expect(cooldownSec).toBeGreaterThanOrEqual(595);
+    expect(cooldownSec).toBeLessThanOrEqual(605);
+  });
+
+  it("patches sessions.json with fallback model", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "provA/model1" } });
+    const { handlers } = setup({ patchSessionPins: true });
+    handlers["agent_end"](
+      { success: false, error: "429 Too Many Requests" },
+      { model: "provA/model1", sessionKey: "s1" }
+    );
+    const sessionsPath = path.join(fakeHome, ".openclaw", "agents", "main", "sessions", "sessions.json");
+    const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf-8"));
+    expect(sessions.s1.model).toBe("provB/model3");
+  });
+
+  it("skips limitation update when model cannot be determined", () => {
+    const { handlers } = setup();
+    handlers["agent_end"](
+      { success: false, error: "429 Too Many Requests" },
+      { sessionKey: "s1" }
+    );
+    const state = loadState(statePath);
+    expect(Object.keys(state.limited)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16. message_sent handler
+// ---------------------------------------------------------------------------
+describe("message_sent handler", () => {
+  const models = ["provA/m1", "provA/m2", "provB/m3"];
+  let tmpDir: string;
+  let statePath: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fo-ms-"));
+    statePath = path.join(tmpDir, "state.json");
+    fakeHome = path.join(tmpDir, "home");
+    fs.mkdirSync(fakeHome, { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    vi.mocked(spawn).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function setup(pluginConfig: Record<string, any> = {}) {
+    const cfg = {
+      stateFile: statePath,
+      modelOrder: models,
+      restartOnSwitch: false,
+      ...pluginConfig,
+    };
+    const { api, handlers, logs } = createMockApi({ pluginConfig: cfg });
+    register(api);
+    return { handlers, logs };
+  }
+
+  it("ignores messages without rate-limit content", () => {
+    const { handlers } = setup();
+    handlers["message_sent"](
+      { content: "Hello, how can I help you?" },
+      { model: "provA/m1", sessionKey: "s1" }
+    );
+    const state = loadState(statePath);
+    expect(Object.keys(state.limited)).toHaveLength(0);
+  });
+
+  it("blocks provider when rate-limit content detected", () => {
+    const { handlers } = setup();
+    handlers["message_sent"](
+      { content: "API rate limit reached for this model." },
+      { model: "provA/m1", sessionKey: "s1" }
+    );
+    const state = loadState(statePath);
+    expect(state.limited["provA/m1"]).toBeDefined();
+    expect(state.limited["provA/m2"]).toBeDefined();
+    expect(state.limited["provB/m3"]).toBeUndefined();
+  });
+
+  it("skips when model cannot be determined", () => {
+    const { handlers } = setup();
+    handlers["message_sent"](
+      { content: "API rate limit reached" },
+      { sessionKey: "s1" }
+    );
+    const state = loadState(statePath);
+    expect(Object.keys(state.limited)).toHaveLength(0);
+  });
+
+  it("patches sessions.json on rate-limit detection", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "provA/m1" } });
+    const { handlers } = setup({ patchSessionPins: true });
+    handlers["message_sent"](
+      { content: "429 Too Many Requests" },
+      { model: "provA/m1", sessionKey: "s1" }
+    );
+    const sessionsPath = path.join(fakeHome, ".openclaw", "agents", "main", "sessions", "sessions.json");
+    const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf-8"));
+    expect(sessions.s1.model).toBe("provB/m3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17. Copilot model filtering in effectiveOrder
+// ---------------------------------------------------------------------------
+describe("copilot model filtering", () => {
+  let tmpDir: string;
+  let statePath: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fo-cp-"));
+    statePath = path.join(tmpDir, "state.json");
+    fakeHome = path.join(tmpDir, "home");
+    fs.mkdirSync(fakeHome, { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    vi.mocked(spawn).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("skips copilot models when copilot-proxy is disabled", () => {
+    const order = ["github-copilot/model1", "anthropic/claude", "google/gemini"];
+    writeSessionsJson(fakeHome, { s1: { model: "github-copilot/model1" } });
+
+    const gwConfig = {
+      plugins: { entries: { "copilot-proxy": { enabled: false } } },
+      agents: { defaults: { models: {
+        "github-copilot/model1": {},
+        "anthropic/claude": {},
+        "google/gemini": {},
+      } } },
+    };
+
+    const { api, handlers } = createMockApi({
+      pluginConfig: {
+        stateFile: statePath,
+        modelOrder: order,
+        restartOnSwitch: false,
+        requireCopilotProxyForCopilotModels: true,
+      },
+      gatewayConfig: gwConfig,
+    });
+    register(api);
+
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toEqual({ modelOverride: "anthropic/claude" });
+  });
+
+  it("includes copilot models when copilot-proxy is enabled", () => {
+    const order = ["github-copilot/model1", "anthropic/claude"];
+    writeSessionsJson(fakeHome, { s1: { model: "github-copilot/model1" } });
+
+    const gwConfig = {
+      plugins: { entries: { "copilot-proxy": { enabled: true } } },
+      agents: { defaults: { models: {
+        "github-copilot/model1": {},
+        "anthropic/claude": {},
+      } } },
+    };
+
+    const { api, handlers } = createMockApi({
+      pluginConfig: {
+        stateFile: statePath,
+        modelOrder: order,
+        restartOnSwitch: false,
+        requireCopilotProxyForCopilotModels: true,
+      },
+      gatewayConfig: gwConfig,
+    });
+    register(api);
+
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 18. Gateway restart scheduling
+// ---------------------------------------------------------------------------
+describe("gateway restart scheduling", () => {
+  let tmpDir: string;
+  let statePath: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fo-gw-"));
+    statePath = path.join(tmpDir, "state.json");
+    fakeHome = path.join(tmpDir, "home");
+    fs.mkdirSync(fakeHome, { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    vi.mocked(spawn).mockClear();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("spawns gateway restart after delay when restartOnSwitch is true", () => {
+    const order = ["provA/m1", "provB/m2"];
+    const { api, handlers } = createMockApi({
+      pluginConfig: {
+        stateFile: statePath,
+        modelOrder: order,
+        restartOnSwitch: true,
+        restartDelayMs: 500,
+      },
+    });
+    register(api);
+
+    handlers["agent_end"](
+      { success: false, error: "429 Too Many Requests" },
+      { model: "provA/m1", sessionKey: "s1" }
+    );
+
+    expect(spawn).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(500);
+    expect(spawn).toHaveBeenCalledWith(
+      "openclaw",
+      ["gateway", "restart"],
+      expect.objectContaining({ detached: true, stdio: "ignore" })
+    );
+  });
+
+  it("does not spawn when restartOnSwitch is false", () => {
+    const order = ["provA/m1", "provB/m2"];
+    const { api, handlers } = createMockApi({
+      pluginConfig: {
+        stateFile: statePath,
+        modelOrder: order,
+        restartOnSwitch: false,
+      },
+    });
+    register(api);
+
+    handlers["agent_end"](
+      { success: false, error: "429 Too Many Requests" },
+      { model: "provA/m1", sessionKey: "s1" }
+    );
+
+    vi.advanceTimersByTime(10000);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 19. End-to-end failover cascade
+// ---------------------------------------------------------------------------
+describe("end-to-end failover cascade", () => {
+  const models = ["alpha/m1", "alpha/m2", "beta/m1", "gamma/m1"];
+  let tmpDir: string;
+  let statePath: string;
+  let fakeHome: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fo-e2e-"));
+    statePath = path.join(tmpDir, "state.json");
+    fakeHome = path.join(tmpDir, "home");
+    fs.mkdirSync(fakeHome, { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    vi.mocked(spawn).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("cascades failover through multiple providers", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "alpha/m1" } });
+    const { api, handlers } = createMockApi({
+      pluginConfig: {
+        stateFile: statePath,
+        modelOrder: models,
+        restartOnSwitch: false,
+        patchSessionPins: true,
+      },
+    });
+    register(api);
+
+    // Step 1: alpha/m1 hits rate limit
+    handlers["agent_end"](
+      { success: false, error: "rate limit exceeded" },
+      { model: "alpha/m1", sessionKey: "s1" }
+    );
+
+    // Verify alpha provider is blocked, beta/gamma are not
+    let state = loadState(statePath);
+    expect(state.limited["alpha/m1"]).toBeDefined();
+    expect(state.limited["alpha/m2"]).toBeDefined();
+    expect(state.limited["beta/m1"]).toBeUndefined();
+
+    // Step 2: before_model_resolve should pick beta/m1
+    let result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toEqual({ modelOverride: "beta/m1" });
+
+    // Step 3: beta/m1 also hits rate limit
+    handlers["agent_end"](
+      { success: false, error: "too many requests" },
+      { model: "beta/m1", sessionKey: "s1" }
+    );
+
+    state = loadState(statePath);
+    expect(state.limited["beta/m1"]).toBeDefined();
+
+    // Step 4: before_model_resolve should cascade to gamma/m1
+    result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toEqual({ modelOverride: "gamma/m1" });
+  });
+
+  it("recovers when a previously limited model becomes available", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "alpha/m1" } });
+
+    // Pre-seed state with alpha blocked but cooldown already expired
+    const state: LimitState = {
+      limited: {
+        "alpha/m1": {
+          lastHitAt: nowSec() - 7200,
+          nextAvailableAt: nowSec() - 1, // expired 1 second ago
+        },
+        "alpha/m2": {
+          lastHitAt: nowSec() - 7200,
+          nextAvailableAt: nowSec() - 1,
+        },
+      },
+    };
+    saveState(statePath, state);
+
+    const { api, handlers } = createMockApi({
+      pluginConfig: {
+        stateFile: statePath,
+        modelOrder: models,
+        restartOnSwitch: false,
+      },
+    });
+    register(api);
+
+    // Pinned model cooldown expired -> should be available again, no override
+    const result = handlers["before_model_resolve"]({}, { sessionKey: "s1" });
+    expect(result).toBeUndefined();
   });
 });

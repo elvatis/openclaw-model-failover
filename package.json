@@ -6,7 +6,6 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:legacy": "node test-logic.ts",
     "build": "tsc --noEmit"
   },
   "openclaw": {

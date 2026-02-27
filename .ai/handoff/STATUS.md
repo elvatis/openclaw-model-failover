@@ -1,7 +1,7 @@
 # openclaw-model-failover: Current State of the Nation
 
-> Last updated: 2026-02-27 by claude-opus-4-6 (v0.2 roadmap definition)
-> Commit: fe36602
+> Last updated: 2026-02-27 by claude-opus-4-6 (T-002: unit tests for failover logic)
+> Commit: pending
 >
 > **Rule:** This file is rewritten (not appended) at the end of every session.
 > It reflects the *current* reality, not history. History lives in LOG.md.
@@ -9,7 +9,7 @@
 ---
 
 <!-- SECTION: summary -->
-v0.1.6 production with auto-gateway-restart on failover. v0.2 roadmap defined as 5 GitHub issues (#1-#5) covering tests, DST bug fix, status inspection, atomic writes, and metrics.
+v0.1.6 production with auto-gateway-restart on failover. 73 vitest unit tests covering all exported utilities and register() handler logic (before_model_resolve, agent_end, message_sent). Legacy mock-based test-logic.ts removed.
 <!-- /SECTION: summary -->
 
 <!-- SECTION: build_health -->
@@ -17,9 +17,9 @@ v0.1.6 production with auto-gateway-restart on failover. v0.2 roadmap defined as
 
 | Check | Result | Notes |
 |-------|--------|-------|
-| `npm test` | Pass (mock only) | test-logic.ts tests mock copies, not real exports (see #1) |
+| `npm test` | Pass (73 tests) | All utility functions + register() handlers tested via vitest |
+| `npm run build` | Pass | tsc --noEmit clean |
 | `lint` | N/A | Not configured |
-| `type-check` | N/A | Not configured separately |
 
 <!-- /SECTION: build_health -->
 
@@ -53,7 +53,7 @@ v0.1.6 production with auto-gateway-restart on failover. v0.2 roadmap defined as
 
 | Gap | Severity | GitHub Issue | Description |
 |-----|----------|-------------|-------------|
-| Real unit tests | HIGH | [#1](https://github.com/homeofe/openclaw-model-failover/issues/1) | Tests exist but only cover mock copies, not real exports |
+| ~~Real unit tests~~ | ~~DONE~~ | [#1](https://github.com/homeofe/openclaw-model-failover/issues/1) | 73 vitest tests covering utilities + handler logic |
 | DST bug | HIGH | [#2](https://github.com/homeofe/openclaw-model-failover/issues/2) | getNextMidnightPT uses hardcoded PST offset, wrong during PDT |
 | Status inspection | MEDIUM | [#3](https://github.com/homeofe/openclaw-model-failover/issues/3) | No way to view current failover state |
 | Atomic writes | MEDIUM | [#4](https://github.com/homeofe/openclaw-model-failover/issues/4) | State file can corrupt under concurrent access |
