@@ -1,6 +1,6 @@
 # openclaw-model-failover: Current State of the Nation
 
-> Last updated: 2026-02-27 by claude-opus-4-6 (T-007: Atomic state file writes)
+> Last updated: 2026-02-27 by claude-opus-4-6 (T-008: Per-model usage metrics and cooldown history)
 > Commit: pending
 >
 > **Rule:** This file is rewritten (not appended) at the end of every session.
@@ -9,7 +9,7 @@
 ---
 
 <!-- SECTION: summary -->
-v0.2.0 production with auto-gateway-restart on failover. 140 vitest unit tests covering all exported utilities, register() handler logic (before_model_resolve, agent_end, message_sent), DST transition edge cases, status inspection (getFailoverStatus, clearModel, clearAllModels, formatDuration, formatStatus), atomic state file writes (atomicWriteFile utility used by both saveState and patchSessionModel), and usage metrics (recordEvent, loadEvents, getMetricsSummary, resetMetrics, formatMetrics, formatEvents). New metrics.ts module provides append-only JSONL event logging with per-model and per-provider aggregation for capacity planning and model order optimization.
+v0.2.0 production with auto-gateway-restart on failover. 160 vitest unit tests covering all exported utilities, register() handler logic (before_model_resolve, agent_end, message_sent), DST transition edge cases, status inspection (getFailoverStatus, clearModel, clearAllModels, formatDuration, formatStatus), atomic state file writes (atomicWriteFile utility used by both saveState and patchSessionModel), usage metrics (recordEvent, loadEvents, getMetricsSummary, resetMetrics, formatMetrics, formatEvents), and per-model cooldown history (getModelHistory, formatModelHistory with cooldown timeline, avg/max/total stats, failover relationship tracking). metrics.ts module provides append-only JSONL event logging with per-model/per-provider aggregation and detailed per-model cooldown history for capacity planning and model order optimization.
 <!-- /SECTION: summary -->
 
 <!-- SECTION: build_health -->
@@ -17,7 +17,7 @@ v0.2.0 production with auto-gateway-restart on failover. 140 vitest unit tests c
 
 | Check | Result | Notes |
 |-------|--------|-------|
-| `npm test` | Pass (140 tests) | All utilities + handlers + DST transitions + status inspection + atomic writes + usage metrics tested via vitest |
+| `npm test` | Pass (160 tests) | All utilities + handlers + DST transitions + status inspection + atomic writes + usage metrics + per-model cooldown history tested via vitest |
 | `npm run build` | Pass | tsc --noEmit clean |
 | `lint` | N/A | Not configured |
 
@@ -47,6 +47,7 @@ v0.2.0 production with auto-gateway-restart on failover. 140 vitest unit tests c
 - **Status inspection CLI** (`npx tsx status.ts`) with pretty-print, JSON, and clear commands
 - **Atomic state writes** - temp-file + rename prevents corruption on crash
 - **Usage metrics** - append-only JSONL event log with per-model/per-provider aggregation, CLI (`npx tsx metrics.ts`), and programmatic API
+- **Per-model cooldown history** - `getModelHistory()` with cooldown timeline, avg/max/total stats, failover relationship tracking, CLI (`npx tsx metrics.ts history <model>`)
 
 <!-- /SECTION: current_state -->
 

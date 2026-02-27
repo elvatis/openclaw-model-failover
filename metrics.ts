@@ -8,10 +8,11 @@
  *   npx tsx metrics.ts                    # pretty-print metrics summary
  *   npx tsx metrics.ts --json             # machine-readable JSON summary
  *   npx tsx metrics.ts tail [N]           # show last N events (default 20)
+ *   npx tsx metrics.ts history <model>    # show cooldown history for a model
  *   npx tsx metrics.ts reset              # clear all metrics
  *
  * Programmatic usage:
- *   import { recordEvent, loadEvents, getMetricsSummary, formatMetrics } from "./metrics.js";
+ *   import { recordEvent, loadEvents, getMetricsSummary, getModelHistory, formatMetrics } from "./metrics.js";
  */
 
 import fs from "node:fs";
@@ -47,6 +48,8 @@ export interface ModelMetrics {
   timesFailedTo: number;
   lastHitAt?: number;
   totalCooldownSec: number;
+  cooldownCount: number;
+  avgCooldownSec: number;
 }
 
 export interface ProviderMetrics {
@@ -54,6 +57,8 @@ export interface ProviderMetrics {
   authErrors: number;
   unavailableErrors: number;
   totalCooldownSec: number;
+  cooldownCount: number;
+  avgCooldownSec: number;
 }
 
 export interface MetricsSummary {
@@ -64,8 +69,33 @@ export interface MetricsSummary {
   totalAuthErrors: number;
   totalUnavailable: number;
   totalFailovers: number;
+  avgCooldownSec: number;
+  recentCooldowns: CooldownEntry[];
   models: Record<string, ModelMetrics>;
   providers: Record<string, ProviderMetrics>;
+}
+
+export interface CooldownEntry {
+  startedAt: number;
+  durationSec: number;
+  type: MetricEventType;
+  reason?: string;
+  trigger?: string;
+  session?: string;
+}
+
+export interface ModelHistory {
+  model: string;
+  events: MetricEvent[];
+  cooldowns: CooldownEntry[];
+  totalErrors: number;
+  totalCooldownSec: number;
+  avgCooldownSec: number;
+  maxCooldownSec: number;
+  firstSeen?: number;
+  lastSeen?: number;
+  failedToModels: Record<string, number>;
+  receivedFromModels: Record<string, number>;
 }
 
 // -------------------------------------------------------------------------
@@ -237,6 +267,97 @@ export function getMetricsSummary(opts?: {
 }
 
 // -------------------------------------------------------------------------
+// Per-model history
+// -------------------------------------------------------------------------
+
+/**
+ * Build a detailed history for a single model including all cooldown entries.
+ * Returns events where the model is the primary subject (not just a failover target),
+ * plus a structured cooldown timeline.
+ */
+export function getModelHistory(opts: {
+  model: string;
+  metricsPath?: string;
+  since?: number;
+  until?: number;
+}): ModelHistory {
+  const metricsPath = opts.metricsPath ?? DEFAULT_METRICS_FILE;
+  const allEvents = loadEvents(metricsPath);
+  const sinceFilter = opts.since ?? 0;
+  const untilFilter = opts.until ?? Infinity;
+
+  const filtered = allEvents.filter(
+    (e) => e.ts >= sinceFilter && e.ts <= untilFilter,
+  );
+
+  // Events where this model is the primary subject
+  const modelEvents = filtered.filter((e) => e.model === opts.model);
+  // Failover events where this model was the target
+  const receivedFailovers = filtered.filter(
+    (e) => e.type === "failover" && e.to === opts.model,
+  );
+
+  const cooldowns: CooldownEntry[] = [];
+  let totalCooldownSec = 0;
+  let maxCooldownSec = 0;
+  let totalErrors = 0;
+  let firstSeen: number | undefined;
+  let lastSeen: number | undefined;
+  const failedToModels: Record<string, number> = {};
+  const receivedFromModels: Record<string, number> = {};
+
+  for (const e of modelEvents) {
+    if (firstSeen === undefined || e.ts < firstSeen) firstSeen = e.ts;
+    if (lastSeen === undefined || e.ts > lastSeen) lastSeen = e.ts;
+
+    if (e.type === "rate_limit" || e.type === "auth_error" || e.type === "unavailable") {
+      totalErrors++;
+      const dur = e.cooldownSec ?? 0;
+      if (dur > 0) {
+        cooldowns.push({
+          startedAt: e.ts,
+          durationSec: dur,
+          type: e.type,
+          reason: e.reason,
+          trigger: e.trigger,
+          session: e.session,
+        });
+        totalCooldownSec += dur;
+        if (dur > maxCooldownSec) maxCooldownSec = dur;
+      }
+    }
+
+    if (e.type === "failover" && e.to) {
+      failedToModels[e.to] = (failedToModels[e.to] ?? 0) + 1;
+    }
+  }
+
+  for (const e of receivedFailovers) {
+    if (firstSeen === undefined || e.ts < firstSeen) firstSeen = e.ts;
+    if (lastSeen === undefined || e.ts > lastSeen) lastSeen = e.ts;
+    receivedFromModels[e.model] = (receivedFromModels[e.model] ?? 0) + 1;
+  }
+
+  const avgCooldownSec = cooldowns.length > 0
+    ? Math.round(totalCooldownSec / cooldowns.length)
+    : 0;
+
+  return {
+    model: opts.model,
+    events: modelEvents,
+    cooldowns,
+    totalErrors,
+    totalCooldownSec,
+    avgCooldownSec,
+    maxCooldownSec,
+    firstSeen,
+    lastSeen,
+    failedToModels,
+    receivedFromModels,
+  };
+}
+
+// -------------------------------------------------------------------------
 // Reset
 // -------------------------------------------------------------------------
 
@@ -339,6 +460,82 @@ export function formatEvents(events: MetricEvent[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Pretty-print a ModelHistory for terminal output.
+ */
+export function formatModelHistory(history: ModelHistory): string {
+  const lines: string[] = [];
+
+  lines.push(`=== Cooldown History: ${history.model} ===`);
+  lines.push("");
+
+  if (history.events.length === 0 && Object.keys(history.receivedFromModels).length === 0) {
+    lines.push("No events recorded for this model.");
+    return lines.join("\n");
+  }
+
+  if (history.firstSeen) {
+    lines.push(`First seen   : ${new Date(history.firstSeen * 1000).toISOString()}`);
+  }
+  if (history.lastSeen) {
+    lines.push(`Last seen    : ${new Date(history.lastSeen * 1000).toISOString()}`);
+  }
+  lines.push(`Total errors : ${history.totalErrors}`);
+  lines.push(`Cooldowns    : ${history.cooldowns.length}`);
+
+  if (history.cooldowns.length > 0) {
+    lines.push(`Avg cooldown : ${formatDurationCompact(history.avgCooldownSec)}`);
+    lines.push(`Max cooldown : ${formatDurationCompact(history.maxCooldownSec)}`);
+    lines.push(`Total time   : ${formatDurationCompact(history.totalCooldownSec)}`);
+  }
+
+  // Failover relationships
+  const failedToKeys = Object.keys(history.failedToModels);
+  if (failedToKeys.length > 0) {
+    lines.push("");
+    lines.push("Failed over to:");
+    for (const model of failedToKeys.sort()) {
+      lines.push(`  -> ${pad(model, 40)} ${history.failedToModels[model]}x`);
+    }
+  }
+
+  const receivedFromKeys = Object.keys(history.receivedFromModels);
+  if (receivedFromKeys.length > 0) {
+    lines.push("");
+    lines.push("Received failovers from:");
+    for (const model of receivedFromKeys.sort()) {
+      lines.push(`  <- ${pad(model, 40)} ${history.receivedFromModels[model]}x`);
+    }
+  }
+
+  // Cooldown timeline
+  if (history.cooldowns.length > 0) {
+    lines.push("");
+    lines.push("Cooldown timeline:");
+    for (const c of history.cooldowns) {
+      const ts = new Date(c.startedAt * 1000).toISOString().replace("T", " ").slice(0, 19);
+      const dur = formatDurationCompact(c.durationSec);
+      const typeLabel = c.type.toUpperCase();
+      const reason = c.reason ? ` (${c.reason.slice(0, 60)})` : "";
+      lines.push(`  [${ts}] ${typeLabel} ${dur}${reason}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function formatDurationCompact(seconds: number): string {
+  if (seconds <= 0) return "0s";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0 && h === 0) parts.push(`${s}s`);
+  return parts.join(" ") || "0s";
+}
+
 // -------------------------------------------------------------------------
 // CLI entry point
 // -------------------------------------------------------------------------
@@ -356,6 +553,19 @@ if (isDirectRun) {
     const events = loadEvents(DEFAULT_METRICS_FILE);
     const tail = events.slice(-count);
     console.log(formatEvents(tail));
+  } else if (args[0] === "history") {
+    const model = args[1];
+    if (!model) {
+      console.log("Usage: npx tsx metrics.ts history <model-id>");
+      process.exit(1);
+    }
+    const jsonFlag = args.includes("--json");
+    const history = getModelHistory({ model });
+    if (jsonFlag) {
+      console.log(JSON.stringify(history, null, 2));
+    } else {
+      console.log(formatModelHistory(history));
+    }
   } else if (args[0] === "reset") {
     const existed = resetMetrics();
     console.log(
@@ -375,6 +585,7 @@ if (isDirectRun) {
         "  (default)             Pretty-print metrics summary",
         "  --json                Output summary as JSON",
         "  tail [N]              Show last N events (default 20)",
+        "  history <model-id>    Show cooldown history for a model",
         "  reset                 Clear all metrics",
         "  --help, -h            Show this help message",
       ].join("\n"),
