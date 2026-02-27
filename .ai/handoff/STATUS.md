@@ -9,7 +9,7 @@
 ---
 
 <!-- SECTION: summary -->
-v0.2.0 production with auto-gateway-restart on failover. 139 vitest unit tests covering all exported utilities, register() handler logic (before_model_resolve, agent_end, message_sent), DST transition edge cases, status inspection (getFailoverStatus, clearModel, clearAllModels, formatDuration, formatStatus), atomic state file writes (atomicWriteFile utility used by both saveState and patchSessionModel), and usage metrics (recordEvent, loadEvents, getMetricsSummary, resetMetrics, formatMetrics, formatEvents). New metrics.ts module provides append-only JSONL event logging with per-model and per-provider aggregation for capacity planning and model order optimization.
+v0.2.0 production with auto-gateway-restart on failover. 140 vitest unit tests covering all exported utilities, register() handler logic (before_model_resolve, agent_end, message_sent), DST transition edge cases, status inspection (getFailoverStatus, clearModel, clearAllModels, formatDuration, formatStatus), atomic state file writes (atomicWriteFile utility used by both saveState and patchSessionModel), and usage metrics (recordEvent, loadEvents, getMetricsSummary, resetMetrics, formatMetrics, formatEvents). New metrics.ts module provides append-only JSONL event logging with per-model and per-provider aggregation for capacity planning and model order optimization.
 <!-- /SECTION: summary -->
 
 <!-- SECTION: build_health -->
@@ -17,7 +17,7 @@ v0.2.0 production with auto-gateway-restart on failover. 139 vitest unit tests c
 
 | Check | Result | Notes |
 |-------|--------|-------|
-| `npm test` | Pass (139 tests) | All utilities + handlers + DST transitions + status inspection + atomic writes + usage metrics tested via vitest |
+| `npm test` | Pass (140 tests) | All utilities + handlers + DST transitions + status inspection + atomic writes + usage metrics tested via vitest |
 | `npm run build` | Pass | tsc --noEmit clean |
 | `lint` | N/A | Not configured |
 
