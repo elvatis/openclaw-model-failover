@@ -85,7 +85,7 @@
       "depends_on": [],
       "created": "2026-02-27T00:48:00Z",
       "github_issue": 2,
-      "completed": "2026-02-27T03:13:19.310Z"
+      "completed": "2026-02-27T03:13:19.31Z"
     },
     "T-004": {
       "title": "Add failover status inspection (issue #3)",
@@ -115,6 +115,22 @@
       "created": "2026-02-27T00:48:00Z",
       "github_issue": 5,
       "completed": "2026-02-27T04:11:50.991Z"
+    },
+    "T-007": {
+      "title": "Add atomic state file writes (prevent corruption)",
+      "status": "ready",
+      "priority": "high",
+      "depends_on": [],
+      "created": "2026-02-27T08:40:56Z",
+      "github_issue": "https://github.com/homeofe/openclaw-model-failover/issues/4"
+    },
+    "T-008": {
+      "title": "Add per-model usage metrics and cooldown history",
+      "status": "ready",
+      "priority": "medium",
+      "depends_on": [],
+      "created": "2026-02-27T08:40:56Z",
+      "github_issue": "https://github.com/homeofe/openclaw-model-failover/issues/5"
     }
   }
 }
