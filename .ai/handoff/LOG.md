@@ -6,6 +6,41 @@
 
 ---
 
+## 2026-02-27 T-006: Usage metrics and cooldown history
+
+**Agent:** claude-opus-4-6
+**Phase:** implementing
+**Commit:** pending
+
+### What was done
+
+- Created `metrics.ts` module with append-only JSONL event logging
+  - `recordEvent()` - appends structured events to JSONL file
+  - `loadEvents()` - reads and parses events, skips malformed lines
+  - `getMetricsSummary()` - aggregates per-model and per-provider counters with optional time filtering
+  - `resetMetrics()` - clears the metrics log
+  - `formatMetrics()` / `formatEvents()` - terminal-friendly output
+  - CLI entry point: `npx tsx metrics.ts [--json | tail [N] | reset]`
+- Integrated metrics recording into `index.ts`:
+  - `agent_end` hook records error events (rate_limit, auth_error, unavailable) and failover events
+  - `message_sent` hook records error events and failover events
+  - New config options: `metricsEnabled` (default true), `metricsFile`
+- Created `metrics.test.ts` with 28 tests covering all functions
+- Updated `openclaw.plugin.json` with metrics config schema
+- Version bumped to 0.2.0 (all v0.2 roadmap tasks complete)
+- Total test count: 133 (84 index + 21 status + 28 metrics)
+- Mocked metrics module in `index.test.ts` to prevent side effects from existing tests
+
+### Decisions made
+
+- Used JSONL format (one JSON object per line) for the event log - simple, append-friendly, easy to parse
+- Metrics are recorded as a side-effect in the hooks rather than requiring separate infrastructure
+- Failover events are separate from error events - a single rate limit hit produces both an error event and a failover event
+- `metricsEnabled` defaults to true so users get metrics out of the box
+- Used `fs.appendFileSync` for simplicity since each line is small and we don't need atomicity for append operations
+
+---
+
 ## 2026-02-27 T-003: Fix DST bug in getNextMidnightPT
 
 **Agent:** claude-opus-4-6

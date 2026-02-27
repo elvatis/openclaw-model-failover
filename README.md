@@ -130,14 +130,94 @@ Model order:
   [OK     ] google-gemini-cli/gemini-3-flash-preview
 ```
 
-## Notes / Limitations (v0.1)
+## Usage Metrics
 
-- This MVP does not re-run the exact failed turn automatically. It is conservative by default: it only overrides the model when the pinned model is marked limited.
+Track failover events for capacity planning and model order optimization.
+Events are recorded to an append-only JSONL log file.
+
+### CLI
+
+```bash
+# Pretty-print metrics summary
+npx tsx metrics.ts
+
+# Machine-readable JSON summary
+npx tsx metrics.ts --json
+
+# Show last 20 events
+npx tsx metrics.ts tail
+
+# Show last 50 events
+npx tsx metrics.ts tail 50
+
+# Clear all metrics
+npx tsx metrics.ts reset
+```
+
+### Programmatic API
+
+```typescript
+import { getMetricsSummary, loadEvents, resetMetrics, formatMetrics } from "./metrics.js";
+
+// Get aggregate summary
+const summary = getMetricsSummary();
+console.log(summary.totalRateLimits);  // total rate limit hits
+console.log(summary.totalFailovers);   // total failover events
+console.log(summary.models);           // per-model breakdown
+console.log(summary.providers);        // per-provider breakdown
+
+// Get raw events
+const events = loadEvents("~/.openclaw/workspace/memory/model-failover-metrics.jsonl");
+
+// Filter by time range
+const lastHour = getMetricsSummary({ since: Date.now() / 1000 - 3600 });
+
+// Clear all metrics
+resetMetrics();
+```
+
+### Configuration
+
+Metrics are enabled by default. To disable or customize:
+
+```json
+{
+  "metricsEnabled": false,
+  "metricsFile": "~/.openclaw/workspace/memory/model-failover-metrics.jsonl"
+}
+```
+
+### Example output
+
+```
+=== OpenClaw Model Failover Metrics ===
+
+Period       : 2026-02-27T00:00:00Z - 2026-02-27T08:30:00Z
+Total events : 12
+Rate limits  : 8
+Auth errors  : 1
+Unavailable  : 0
+Failovers    : 3
+
+By provider:
+  openai-codex                   5 errors  (rate=4 auth=1 unavail=0)
+  google-gemini-cli              4 errors  (rate=4 auth=0 unavail=0)
+
+By model:
+  google-gemini-cli/gemini-2.5-pro         2 errors  failed-from=1
+  openai-codex/gpt-5.2                     2 errors  failed-from=1
+  openai-codex/gpt-5.3-codex              3 errors  failed-from=1
+  anthropic/claude-opus-4-6                             failed-to=3
+```
+
+## Notes / Limitations
+
+- This plugin does not re-run the exact failed turn automatically. It is conservative by default: it only overrides the model when the pinned model is marked limited.
   It prevents future turns from failing by switching the session model.
 - The plugin stores state in `~/.openclaw/workspace/memory/model-ratelimits.json` by default.
+- Metrics events are logged to `~/.openclaw/workspace/memory/model-failover-metrics.jsonl` by default.
 
 ## Roadmap
 
 - Auto-retry same turn after switch (requires deeper agent-loop integration)
-- Provider-level limits (not only model string keys)
 - Per-channel routing policies

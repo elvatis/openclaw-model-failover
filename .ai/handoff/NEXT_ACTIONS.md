@@ -100,6 +100,9 @@
 | T-001: Define v0.2 roadmap | DONE - 5 GitHub issues created (2026-02-27) |
 | T-002: Write unit tests for failover logic | DONE - 73 vitest tests (2026-02-27) |
 | T-003: Fix DST bug in getNextMidnightPT | DONE - tries both offsets, 8 DST tests added (2026-02-27) |
+| T-004: Add failover status inspection | DONE - status.ts with CLI + API, 21 tests (2026-02-27) |
+| T-005: Atomic state file writes | DONE - temp-file + rename pattern (2026-02-27) |
+| T-006: Usage metrics and cooldown history | DONE - metrics.ts with JSONL event log, 28 tests (2026-02-27) |
 | Initial scaffold | Done |
 | Copilot-proxy cooldown detection | Done in v0.1.2 (commit a35b015) |
 | Immediate in-memory session override | Done in v0.1.2 |
