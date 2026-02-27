@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
 
-function expandHome(p: string): string {
+export function expandHome(p: string): string {
   if (!p) return p;
   if (p === "~") return os.homedir();
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
@@ -30,7 +30,7 @@ type PluginCfg = {
   restartDelayMs?: number;
 };
 
-type LimitState = {
+export type LimitState = {
   // key: model id OR provider id (we keep it simple with model ids)
   limited: Record<
     string,
@@ -42,29 +42,65 @@ type LimitState = {
   >;
 };
 
-function nowSec() {
+export function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
-function getNextMidnightPT(): number {
+export function getNextMidnightPT(): number {
+  // Use Intl.DateTimeFormat to determine the real UTC offset for America/Los_Angeles,
+  // which correctly handles both PST (UTC-8) and PDT (UTC-7) transitions.
   const now = new Date();
-  // Pacific Time is UTC-8 (PST) or UTC-7 (PDT).
-  // Simplified: use UTC-8 for safety (slightly later reset is safer).
-  const utcNow = now.getTime();
-  const ptOffset = -8 * 60 * 60 * 1000;
-  const ptTime = new Date(utcNow + ptOffset);
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const get = (type: string) =>
+    parts.find((p) => p.type === type)?.value ?? "0";
+  const ptYear = parseInt(get("year"), 10);
+  const ptMonth = parseInt(get("month"), 10);
+  const ptDay = parseInt(get("day"), 10);
+  const ptHour = parseInt(get("hour"), 10);
 
-  ptTime.setUTCHours(24, 0, 0, 0); // next midnight in PT (represented in shifted UTC)
-  return Math.floor((ptTime.getTime() - ptOffset) / 1000);
+  // Build a Date representing "today midnight PT" in terms of calendar values,
+  // then derive the actual UTC offset by comparing with the real UTC time.
+  // To find "next midnight PT", advance the PT calendar day by 1.
+  const tomorrowPT = new Date(
+    Date.UTC(ptYear, ptMonth - 1, ptDay + 1, 0, 0, 0, 0)
+  );
+
+  // Determine current PT offset: diff between UTC time and PT calendar time.
+  // PT calendar time expressed as UTC gives us the offset.
+  const todayPTasUTC = new Date(
+    Date.UTC(
+      ptYear,
+      ptMonth - 1,
+      ptDay,
+      ptHour,
+      parseInt(get("minute"), 10),
+      parseInt(get("second"), 10)
+    )
+  );
+  const offsetMs = now.getTime() - todayPTasUTC.getTime();
+
+  // Next midnight PT in real UTC = tomorrowPT calendar midnight + offset
+  const nextMidnightUTC = tomorrowPT.getTime() + offsetMs;
+  return Math.floor(nextMidnightUTC / 1000);
 }
 
-function getNextMidnightUTC(): number {
+export function getNextMidnightUTC(): number {
   const now = new Date();
   now.setUTCHours(24, 0, 0, 0);
   return Math.floor(now.getTime() / 1000);
 }
 
-function parseWaitTime(err: string): number | undefined {
+export function parseWaitTime(err: string): number | undefined {
   // Common patterns: "Try again in 4m30s", "after 12:00 UTC", "retry after 60 seconds"
   const s = err.toLowerCase();
   
@@ -85,7 +121,7 @@ function parseWaitTime(err: string): number | undefined {
   return undefined;
 }
 
-function calculateCooldown(provider: string, err?: string, defaultMinutes = 60): number {
+export function calculateCooldown(provider: string, err?: string, defaultMinutes = 60): number {
   if (!err) return defaultMinutes * 60;
   
   // 1. Try to parse specific wait time from error
@@ -116,7 +152,7 @@ function calculateCooldown(provider: string, err?: string, defaultMinutes = 60):
 }
 
 
-function isRateLimitLike(err?: string): boolean {
+export function isRateLimitLike(err?: string): boolean {
   if (!err) return false;
   const s = err.toLowerCase();
   return (
@@ -128,7 +164,7 @@ function isRateLimitLike(err?: string): boolean {
   );
 }
 
-function isAuthOrScopeLike(err?: string): boolean {
+export function isAuthOrScopeLike(err?: string): boolean {
   if (!err) return false;
   const s = err.toLowerCase();
   // OpenAI: "Missing scopes: api.responses.write" etc.
@@ -142,7 +178,7 @@ function isAuthOrScopeLike(err?: string): boolean {
   );
 }
 
-function isTemporarilyUnavailableLike(err?: string): boolean {
+export function isTemporarilyUnavailableLike(err?: string): boolean {
   if (!err) return false;
   const s = err.toLowerCase();
   return (
@@ -154,7 +190,7 @@ function isTemporarilyUnavailableLike(err?: string): boolean {
   );
 }
 
-function loadState(statePath: string): LimitState {
+export function loadState(statePath: string): LimitState {
   try {
     const raw = fs.readFileSync(statePath, "utf-8");
     const parsed = JSON.parse(raw);
@@ -166,12 +202,12 @@ function loadState(statePath: string): LimitState {
   }
 }
 
-function saveState(statePath: string, state: LimitState) {
+export function saveState(statePath: string, state: LimitState) {
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
-function firstAvailableModel(order: string[], state: LimitState): string | undefined {
+export function firstAvailableModel(order: string[], state: LimitState): string | undefined {
   const t = nowSec();
   for (const m of order) {
     const lim = state.limited[m];
