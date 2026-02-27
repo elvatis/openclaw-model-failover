@@ -206,18 +206,25 @@ export function loadState(statePath: string): LimitState {
   }
 }
 
-export function saveState(statePath: string, state: LimitState) {
-  fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  // Atomic write: write to temp file, then rename over the target.
-  // This prevents corruption if the process crashes mid-write.
-  const tmpPath = statePath + ".tmp";
+/**
+ * Write a file atomically: write to a .tmp sibling first, then rename
+ * over the target. This prevents corruption if the process crashes mid-write.
+ * Creates parent directories if they do not exist.
+ */
+export function atomicWriteFile(filePath: string, data: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpPath = filePath + ".tmp";
   try {
-    fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
-    fs.renameSync(tmpPath, statePath);
+    fs.writeFileSync(tmpPath, data);
+    fs.renameSync(tmpPath, filePath);
   } catch (err) {
     try { fs.unlinkSync(tmpPath); } catch {}
     throw err;
   }
+}
+
+export function saveState(statePath: string, state: LimitState) {
+  atomicWriteFile(statePath, JSON.stringify(state, null, 2));
 }
 
 export function firstAvailableModel(order: string[], state: LimitState): string | undefined {
@@ -238,7 +245,7 @@ function patchSessionModel(sessionKey: string, model: string, logger: any) {
     if (!data[sessionKey]) return false;
     const prev = data[sessionKey].model;
     data[sessionKey].model = model;
-    fs.writeFileSync(sessionsPath, JSON.stringify(data, null, 0));
+    atomicWriteFile(sessionsPath, JSON.stringify(data, null, 0));
     logger?.info?.(`[model-failover] Patched session ${sessionKey} model: ${prev} -> ${model}`);
     return true;
   } catch (e: any) {

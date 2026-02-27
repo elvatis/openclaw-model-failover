@@ -1,6 +1,6 @@
 # openclaw-model-failover: Current State of the Nation
 
-> Last updated: 2026-02-27 by claude-opus-4-6 (T-006: Usage metrics and cooldown history)
+> Last updated: 2026-02-27 by claude-opus-4-6 (T-007: Atomic state file writes)
 > Commit: pending
 >
 > **Rule:** This file is rewritten (not appended) at the end of every session.
@@ -9,7 +9,7 @@
 ---
 
 <!-- SECTION: summary -->
-v0.2.0 production with auto-gateway-restart on failover. 133 vitest unit tests covering all exported utilities, register() handler logic (before_model_resolve, agent_end, message_sent), DST transition edge cases, status inspection (getFailoverStatus, clearModel, clearAllModels, formatDuration, formatStatus), atomic state file writes, and usage metrics (recordEvent, loadEvents, getMetricsSummary, resetMetrics, formatMetrics, formatEvents). New metrics.ts module provides append-only JSONL event logging with per-model and per-provider aggregation for capacity planning and model order optimization.
+v0.2.0 production with auto-gateway-restart on failover. 139 vitest unit tests covering all exported utilities, register() handler logic (before_model_resolve, agent_end, message_sent), DST transition edge cases, status inspection (getFailoverStatus, clearModel, clearAllModels, formatDuration, formatStatus), atomic state file writes (atomicWriteFile utility used by both saveState and patchSessionModel), and usage metrics (recordEvent, loadEvents, getMetricsSummary, resetMetrics, formatMetrics, formatEvents). New metrics.ts module provides append-only JSONL event logging with per-model and per-provider aggregation for capacity planning and model order optimization.
 <!-- /SECTION: summary -->
 
 <!-- SECTION: build_health -->
@@ -17,7 +17,7 @@ v0.2.0 production with auto-gateway-restart on failover. 133 vitest unit tests c
 
 | Check | Result | Notes |
 |-------|--------|-------|
-| `npm test` | Pass (133 tests) | All utilities + handlers + DST transitions + status inspection + atomic writes + usage metrics tested via vitest |
+| `npm test` | Pass (139 tests) | All utilities + handlers + DST transitions + status inspection + atomic writes + usage metrics tested via vitest |
 | `npm run build` | Pass | tsc --noEmit clean |
 | `lint` | N/A | Not configured |
 
@@ -60,7 +60,7 @@ v0.2.0 production with auto-gateway-restart on failover. 133 vitest unit tests c
 | ~~Real unit tests~~ | DONE | [#1](https://github.com/homeofe/openclaw-model-failover/issues/1) | 84 vitest tests covering utilities + handlers + DST |
 | ~~DST bug~~ | DONE | [#2](https://github.com/homeofe/openclaw-model-failover/issues/2) | getNextMidnightPT now tries both offsets, verified with DST transition tests |
 | ~~Status inspection~~ | DONE | [#3](https://github.com/homeofe/openclaw-model-failover/issues/3) | status.ts with CLI + programmatic API, 21 tests |
-| ~~Atomic writes~~ | DONE | [#4](https://github.com/homeofe/openclaw-model-failover/issues/4) | saveState() uses temp-file + rename for crash-safe writes |
+| ~~Atomic writes~~ | DONE | [#4](https://github.com/homeofe/openclaw-model-failover/issues/4) | atomicWriteFile() utility used by saveState() and patchSessionModel() for crash-safe writes |
 | ~~Usage metrics~~ | DONE | [#5](https://github.com/homeofe/openclaw-model-failover/issues/5) | metrics.ts with JSONL event log, aggregation, CLI, 28 tests |
 
 <!-- /SECTION: what_is_missing -->

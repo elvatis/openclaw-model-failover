@@ -14,6 +14,7 @@ import register, {
   isTemporarilyUnavailableLike,
   loadState,
   saveState,
+  atomicWriteFile,
   firstAvailableModel,
   expandHome,
   type LimitState,
@@ -425,6 +426,59 @@ describe("getNextMidnightUTC", () => {
     expect(d.getUTCHours()).toBe(0);
     expect(d.getUTCMinutes()).toBe(0);
     expect(d.getUTCSeconds()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8b. atomicWriteFile utility
+// ---------------------------------------------------------------------------
+describe("atomicWriteFile", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "awf-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes data to the target file", () => {
+    const target = path.join(tmpDir, "out.json");
+    atomicWriteFile(target, '{"hello":"world"}');
+    expect(fs.readFileSync(target, "utf-8")).toBe('{"hello":"world"}');
+  });
+
+  it("creates parent directories if they do not exist", () => {
+    const target = path.join(tmpDir, "deep", "nested", "dir", "file.txt");
+    atomicWriteFile(target, "content");
+    expect(fs.existsSync(target)).toBe(true);
+    expect(fs.readFileSync(target, "utf-8")).toBe("content");
+  });
+
+  it("does not leave a .tmp file after successful write", () => {
+    const target = path.join(tmpDir, "clean.json");
+    atomicWriteFile(target, "data");
+    expect(fs.existsSync(target)).toBe(true);
+    expect(fs.existsSync(target + ".tmp")).toBe(false);
+  });
+
+  it("preserves existing file when temp write fails", () => {
+    const target = path.join(tmpDir, "keep.json");
+    atomicWriteFile(target, "original");
+
+    // Place a directory at the .tmp path to force writeFileSync to fail
+    fs.mkdirSync(target + ".tmp", { recursive: true });
+
+    expect(() => atomicWriteFile(target, "replacement")).toThrow();
+    expect(fs.readFileSync(target, "utf-8")).toBe("original");
+  });
+
+  it("overwrites existing file atomically", () => {
+    const target = path.join(tmpDir, "replace.json");
+    atomicWriteFile(target, "first");
+    atomicWriteFile(target, "second");
+    expect(fs.readFileSync(target, "utf-8")).toBe("second");
   });
 });
 
@@ -897,6 +951,21 @@ describe("agent_end handler", () => {
     expect(sessions.s1.model).toBe("provB/model3");
   });
 
+  it("patches sessions.json atomically (no .tmp left behind)", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "provA/model1" } });
+    const { handlers } = setup({ patchSessionPins: true });
+    handlers["agent_end"](
+      { success: false, error: "429 Too Many Requests" },
+      { model: "provA/model1", sessionKey: "s1" }
+    );
+    const sessionsPath = path.join(fakeHome, ".openclaw", "agents", "main", "sessions", "sessions.json");
+    expect(fs.existsSync(sessionsPath)).toBe(true);
+    expect(fs.existsSync(sessionsPath + ".tmp")).toBe(false);
+    // Verify the content is valid JSON
+    const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf-8"));
+    expect(sessions.s1.model).toBe("provB/model3");
+  });
+
   it("skips limitation update when model cannot be determined", () => {
     const { handlers } = setup();
     handlers["agent_end"](
@@ -983,6 +1052,20 @@ describe("message_sent handler", () => {
       { model: "provA/m1", sessionKey: "s1" }
     );
     const sessionsPath = path.join(fakeHome, ".openclaw", "agents", "main", "sessions", "sessions.json");
+    const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf-8"));
+    expect(sessions.s1.model).toBe("provB/m3");
+  });
+
+  it("patches sessions.json atomically via message_sent (no .tmp left)", () => {
+    writeSessionsJson(fakeHome, { s1: { model: "provA/m1" } });
+    const { handlers } = setup({ patchSessionPins: true });
+    handlers["message_sent"](
+      { content: "API rate limit reached" },
+      { model: "provA/m1", sessionKey: "s1" }
+    );
+    const sessionsPath = path.join(fakeHome, ".openclaw", "agents", "main", "sessions", "sessions.json");
+    expect(fs.existsSync(sessionsPath)).toBe(true);
+    expect(fs.existsSync(sessionsPath + ".tmp")).toBe(false);
     const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf-8"));
     expect(sessions.s1.model).toBe("provB/m3");
   });
