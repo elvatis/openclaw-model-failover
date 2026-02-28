@@ -221,3 +221,8 @@ By model:
 
 - Auto-retry same turn after switch (requires deeper agent-loop integration)
 - Per-channel routing policies
+
+## Shared Template
+
+For automation that creates GitHub issues, use `src/templates/github-issue-helper.ts`.
+It provides `isValidIssueRepoSlug()`, `resolveIssueRepo()`, and `buildGhIssueCreateCommand()`.
