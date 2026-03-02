@@ -390,7 +390,24 @@ export default function register(api: any) {
       const sessionsPath = path.join(os.homedir(), ".openclaw/agents/main/sessions/sessions.json");
       const raw = fs.readFileSync(sessionsPath, "utf-8");
       const data = JSON.parse(raw);
-      return data?.[sessionKey]?.model;
+      const sessionModel = data?.[sessionKey]?.model;
+      if (!sessionModel) return undefined;
+      // sessions.json historically stores model ids without provider prefix (e.g. "claude-opus-4.6").
+      // Resolve this to a full provider/model string by checking the gateway config mapping
+      try {
+        const gatewayCfg = loadGatewayConfig(api);
+        if (gatewayCfg && gatewayCfg.agents && gatewayCfg.agents.defaults && gatewayCfg.agents.defaults.models) {
+          const modelsMap = gatewayCfg.agents.defaults.models;
+          // If sessionModel already contains a provider prefix, return as-is
+          if (typeof sessionModel === 'string' && sessionModel.includes('/')) return sessionModel;
+          // Otherwise, find a configured model whose key ends with the sessionModel
+          for (const key of Object.keys(modelsMap)) {
+            const seg = key.split('/').pop();
+            if (seg === sessionModel) return key; // return full provider/model
+          }
+        }
+      } catch {}
+      return sessionModel;
     } catch {
       return undefined;
     }
