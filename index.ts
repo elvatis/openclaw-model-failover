@@ -189,7 +189,11 @@ export function isTemporarilyUnavailableLike(err?: string): boolean {
     s.includes("plugin is in cooldown") ||
     s.includes("in cooldown") ||
     s.includes("temporarily unavailable") ||
+    s.includes("temporarily overloaded") ||
     s.includes("service unavailable") ||
+    s.includes("service is temporarily") ||
+    s.includes("overloaded") ||
+    s.includes("529") ||
     s.includes("copilot-proxy")
   );
 }

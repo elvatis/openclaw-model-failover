@@ -101,6 +101,22 @@ describe("isTemporarilyUnavailableLike", () => {
     expect(isTemporarilyUnavailableLike("copilot-proxy not responding")).toBe(true);
   });
 
+  it("detects 'temporarily overloaded' (gateway chat message)", () => {
+    expect(isTemporarilyUnavailableLike("The AI service is temporarily overloaded. Please try again in a moment.")).toBe(true);
+  });
+
+  it("detects bare 'overloaded'", () => {
+    expect(isTemporarilyUnavailableLike("Overloaded")).toBe(true);
+  });
+
+  it("detects HTTP 529 (Anthropic overloaded status)", () => {
+    expect(isTemporarilyUnavailableLike("HTTP 529")).toBe(true);
+  });
+
+  it("detects 'service is temporarily'", () => {
+    expect(isTemporarilyUnavailableLike("service is temporarily down")).toBe(true);
+  });
+
   it("returns false for unrelated errors", () => {
     expect(isTemporarilyUnavailableLike("Syntax error")).toBe(false);
     expect(isTemporarilyUnavailableLike(undefined)).toBe(false);
