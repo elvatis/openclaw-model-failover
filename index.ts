@@ -462,17 +462,26 @@ export default function register(api: any) {
 
   // 2) When agent ends with rate limit: mark current model limited + patch session pin.
   api.on("agent_end", (event: any, ctx: any) => {
-    if (event?.success !== false) return;
+    // Accept both explicit failure (success === false) and implicit failure
+    // (error string present but success not set - common with overloaded errors).
     const err = event?.error as string | undefined;
+    const output = typeof event?.output === "string" ? event.output : undefined;
+    const errorText = err || output;
+    if (event?.success === true) return;
+    if (event?.success !== false && !errorText) return;
 
-    const isRate = isRateLimitLike(err);
-    const isAuth = isAuthOrScopeLike(err);
-    const isUnavailable = isTemporarilyUnavailableLike(err);
+    const isRate = isRateLimitLike(errorText);
+    const isAuth = isAuthOrScopeLike(errorText);
+    const isUnavailable = isTemporarilyUnavailableLike(errorText);
     if (!isRate && !isAuth && !isUnavailable) return;
 
-    const currentModel = ctx?.model || ctx?.modelId || undefined;
+    // Try multiple sources for the model: context fields, then session-pinned model
+    let currentModel = ctx?.model || ctx?.modelId || undefined;
     if (typeof currentModel !== "string" || currentModel.length === 0) {
-      api.logger?.warn?.("[model-failover] Could not determine failed model from context; skipping limitation update.");
+      currentModel = getPinnedModel(ctx?.sessionKey);
+    }
+    if (typeof currentModel !== "string" || currentModel.length === 0) {
+      api.logger?.warn?.("[model-failover] Could not determine failed model from context or session; skipping limitation update.");
       return;
     }
 
@@ -490,7 +499,7 @@ export default function register(api: any) {
     const defaultCooldownMin = isAuth
       ? Math.max(cooldownMinutes, 12 * 60)
       : (isUnavailable ? unavailableCooldownMinutes : cooldownMinutes);
-    const nextAvail = hitAt + calculateCooldown(provider, err, defaultCooldownMin);
+    const nextAvail = hitAt + calculateCooldown(provider, errorText, defaultCooldownMin);
 
     // If it looks like a provider prefix (no spaces, has slash), assume provider-wide block for rate limits
     const isProviderWide = isRate && provider.length > 0;
@@ -503,7 +512,7 @@ export default function register(api: any) {
                 state.limited[m] = {
                     lastHitAt: hitAt,
                     nextAvailableAt: nextAvail,
-                    reason: `Provider ${provider} exhausted: ${err?.slice(0, 100)}`
+                    reason: `Provider ${provider} exhausted: ${errorText?.slice(0, 100)}`
                 };
                 blockedCount++;
             }
@@ -514,10 +523,10 @@ export default function register(api: any) {
         state.limited[key] = {
             lastHitAt: hitAt,
             nextAvailableAt: nextAvail,
-            reason: err?.slice(0, 200),
+            reason: errorText?.slice(0, 200),
         };
     }
-    
+
     saveState(statePath, state);
 
     const cooldownSec = nextAvail - hitAt;
@@ -529,7 +538,7 @@ export default function register(api: any) {
       type: errorType,
       model: key,
       provider,
-      reason: err?.slice(0, 200),
+      reason: errorText?.slice(0, 200),
       cooldownSec,
       trigger: "agent_end",
       session: ctx?.sessionKey,
@@ -568,7 +577,7 @@ export default function register(api: any) {
 
   // 3) If we ever send the raw rate-limit error to a channel, immediately patch the session.
   api.on("message_sent", (event: any, ctx: any) => {
-    const content = (event?.content ?? "") as string;
+    const content = (event?.content ?? event?.text ?? event?.message ?? "") as string;
     if (!content) return;
     const isRate = isRateLimitLike(content) || content.includes("API rate limit reached");
     const isUnavailable = isTemporarilyUnavailableLike(content);
@@ -577,10 +586,17 @@ export default function register(api: any) {
     const state = loadState(statePath);
     const order = effectiveOrder();
 
-    // Only limit if we can identify the real current model.
-    const currentModelRaw = ctx?.model || ctx?.modelId;
-    if (typeof currentModelRaw !== "string" || currentModelRaw.length === 0) return;
-    const currentModel = currentModelRaw;
+    // Try to identify the current model from context, then fall back to session pin.
+    let currentModel = ctx?.model || ctx?.modelId;
+    if (typeof currentModel !== "string" || currentModel.length === 0) {
+      currentModel = getPinnedModel(ctx?.sessionKey);
+    }
+    if (typeof currentModel !== "string" || currentModel.length === 0) {
+      // Last resort: block the first model in the order (most likely the one that was used)
+      currentModel = order[0];
+      debugLog(`message_sent: could not determine model, defaulting to first in order: ${currentModel}`);
+    }
+    if (!currentModel) return;
     const provider = currentModel.split("/")[0];
 
     const hitAt = nowSec();
