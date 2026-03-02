@@ -1,7 +1,6 @@
 {
   "name": "@elvatis_com/openclaw-model-failover",
   "version": "0.2.0",
-  "private": true,
   "type": "module",
   "scripts": {
     "test": "vitest run",
