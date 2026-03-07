@@ -1,6 +1,7 @@
 {
   "name": "@elvatis_com/openclaw-model-failover",
-  "version": "0.2.1",
+  "version": "0.2.2",
+  "description": "DEPRECATED: Merged into openclaw-self-healing-elvatis",
   "type": "module",
   "scripts": {
     "test": "vitest run",

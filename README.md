@@ -1,5 +1,8 @@
 # openclaw-model-failover
 
+> [!WARNING]
+> **DEPRECATED:** This plugin has been merged into `openclaw-self-healing-elvatis`. Please use the self-healing plugin instead. This repository is archived.
+
 OpenClaw plugin to **auto-detect rate limits/quota errors** and switch sessions to fallback LLMs.
 
 ## What it does
